@@ -1,4 +1,4 @@
-"""广东省插件（Phase 12）。"""
+"""河北省插件（Phase 14.1）。"""
 
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ from crawlers.http_crawler import HttpProvinceCrawler
 from importers.file_import import UnsupportedImportFormatError
 from importers.pipeline import run_excel_pipeline, run_pdf_pipeline, run_parsed_pipeline
 from provinces.base import ProvincePlugin
-from provinces.guangdong import config
+from provinces.hebei import config
 
 
-def _is_gd_detail_url(url: str) -> bool:
+def _is_hebei_detail_url(url: str) -> bool:
     path = urlparse(url).path.lower()
-    return "/content/post_" in path
+    return "/html/xxgl/tzgg/" in path and path.endswith(".html")
 
 
-class GuangdongPlugin(ProvincePlugin):
+class HebeiPlugin(ProvincePlugin):
     province_name = config.PROVINCE_NAME
     province_slug = config.PROVINCE_SLUG
     supported_years = config.SUPPORTED_YEARS
@@ -31,7 +31,7 @@ class GuangdongPlugin(ProvincePlugin):
     discovery_strategy = config.DISCOVERY_STRATEGY
     seed_announcements = config.SEED_ANNOUNCEMENTS
     default_subject_type = config.DEFAULT_SUBJECT_TYPE
-    is_detail_page_url = staticmethod(_is_gd_detail_url)
+    is_detail_page_url = staticmethod(_is_hebei_detail_url)
 
     def discover(
         self,
@@ -121,4 +121,4 @@ class GuangdongPlugin(ProvincePlugin):
         )
 
 
-__all__ = ["GuangdongPlugin"]
+__all__ = ["HebeiPlugin"]

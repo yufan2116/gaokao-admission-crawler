@@ -113,6 +113,13 @@ class ProvincePlugin(ABC):
         """返回本省爬虫实例；未实现时返回 None。"""
         return None
 
+    @property
+    def source_adapter(self) -> Any:
+        """本省数据源适配器（Phase 15 Source Adapter）。"""
+        from sources.registry import get_source_adapter_for_plugin
+
+        return get_source_adapter_for_plugin(self)
+
     def coverage_summary(self) -> dict[str, Any]:
         """Dashboard / CLI 用的静态覆盖说明。"""
         year_range = (

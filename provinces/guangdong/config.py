@@ -33,7 +33,7 @@ DISCOVERY_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
-# 官方公告 seed（可人工增补）；2024 年附件多为 ZIP/PDF，下载后 PDF 标记 downloaded_not_imported
+# 官方公告 seed；ZIP/PDF 下载后仅普通类 school 入库（Phase 13.1 艺体类 skipped_unsupported_category）
 SEED_ANNOUNCEMENTS: dict[int, list[dict[str, str]]] = {
     2024: [
         {

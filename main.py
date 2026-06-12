@@ -520,7 +520,7 @@ def cmd_discover_download_import(args: argparse.Namespace) -> int:
         print(f"combined report: {result['combined_report_path']}")
     print(
         f"{'year':<6} {'pages':<6} {'dl':<4} {'imported':<9} {'skipped':<8} "
-        f"{'no_imp':<6} {'failed':<6} error"
+        f"{'no_imp':<6} {'skip_cat':<8} {'failed':<6} error"
     )
     print("-" * 80)
     has_failure = False
@@ -535,6 +535,7 @@ def cmd_discover_download_import(args: argparse.Namespace) -> int:
             f"{row.get('imported', 0):<9} "
             f"{row.get('skipped', 0):<8} "
             f"{row.get('downloaded_not_imported', 0):<6} "
+            f"{row.get('skipped_unsupported_category', 0):<8} "
             f"{row.get('failed', 0):<6} "
             f"{err}"
         )

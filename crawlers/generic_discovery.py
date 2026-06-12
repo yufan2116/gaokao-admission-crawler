@@ -148,30 +148,69 @@ def _parse_html_list_links(
     return found
 
 
+def _attachment_from_direct_url(title: str, attachment_url: str) -> dict[str, str]:
+    """seed 中配置的附件直链 → 标准 attachment 结构。"""
+    path = urlparse(attachment_url).path.lower()
+    if path.endswith(".xlsx"):
+        file_type = "excel"
+    elif path.endswith(".xls"):
+        file_type = "excel"
+    elif path.endswith(".pdf"):
+        file_type = "pdf"
+    elif path.endswith(".zip"):
+        file_type = "zip"
+    else:
+        file_type = "unknown"
+    return {
+        "title": title,
+        "url": attachment_url,
+        "file_type": file_type,
+    }
+
+
 def _build_source_entry(item: dict[str, Any], crawler: HttpProvinceCrawler) -> dict[str, Any]:
     title = item["title"]
     page_url = item["page_url"]
     year = item["year"]
+    attachment_url = (item.get("attachment_url") or "").strip()
     attachments: list[dict[str, str]] = []
     access_status = "ok"
     page_html = ""
-    try:
-        page_html = crawler.fetch_page(page_url)
-        from crawlers.jiangsu import _extract_attachments_from_html
+    if attachment_url:
+        attachments = [_attachment_from_direct_url(title, attachment_url)]
+    else:
+        try:
+            page_html = crawler.fetch_page(page_url)
+            from crawlers.jiangsu import _extract_attachments_from_html
 
-        raw_attachments = _extract_attachments_from_html(page_html, page_url)
-        suggested = classify_suggested_type(title)
-        attachments = filter_data_attachments(raw_attachments, data_type=suggested)
-        access_status = _assess_source_access(page_url, page_html, attachments)
-    except requests.HTTPError as exc:
-        status = exc.response.status_code if exc.response is not None else None
-        if status in (403, 412):
-            access_status = "unsupported_verification_required"
-        logger.warning("提取附件失败 [%s]: %s", page_url, exc)
-    except Exception as exc:
-        logger.warning("提取附件失败 [%s]: %s", page_url, exc)
+            raw_attachments = _extract_attachments_from_html(page_html, page_url)
+            suggested = classify_suggested_type(title)
+            attachments = filter_data_attachments(raw_attachments, data_type=suggested)
+            access_status = _assess_source_access(page_url, page_html, attachments)
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status in (403, 412):
+                access_status = "unsupported_verification_required"
+            logger.warning("提取附件失败 [%s]: %s", page_url, exc)
+        except Exception as exc:
+            logger.warning("提取附件失败 [%s]: %s", page_url, exc)
 
-    school_meta = infer_school_metadata_from_title(title)
+    if crawler.province == "广东":
+        from provinces.guangdong.metadata import infer_guangdong_school_metadata
+
+        school_meta = infer_guangdong_school_metadata(title)
+    elif crawler.province == "福建":
+        from provinces.fujian.metadata import infer_fujian_school_metadata
+
+        school_meta = infer_fujian_school_metadata(title)
+    elif crawler.province == "河北":
+        from provinces.hebei.metadata import infer_hebei_school_metadata
+
+        school_meta = infer_hebei_school_metadata(title)
+    else:
+        school_meta = infer_school_metadata_from_title(title)
+    from sources.base import normalize_access_status
+
     return {
         "year": year,
         "title": title,
@@ -181,7 +220,7 @@ def _build_source_entry(item: dict[str, Any], crawler: HttpProvinceCrawler) -> d
         "suggested_type": classify_suggested_type(title),
         "admission_category": school_meta["admission_category"],
         "batch": school_meta["batch"],
-        "access_status": access_status,
+        "access_status": normalize_access_status(access_status).value,
     }
 
 
@@ -213,13 +252,15 @@ def discover_plugin_sources(
         for seed in seeds:
             title = seed.get("title") or ""
             page_url = seed.get("page_url") or ""
-            if not page_url:
+            attachment_url = (seed.get("attachment_url") or "").strip()
+            if not page_url and not attachment_url:
                 continue
             matched_kw = match_keyword(title, keywords) or keywords[0]
             raw_items.append(
                 {
                     "title": title,
-                    "page_url": page_url,
+                    "page_url": page_url or attachment_url,
+                    "attachment_url": attachment_url,
                     "matched_keyword": matched_kw,
                     "year": year,
                 }

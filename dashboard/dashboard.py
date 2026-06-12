@@ -26,6 +26,7 @@ from dashboard.data_access import (  # noqa: E402
     get_metadata_by_school_type,
     get_metadata_distinct_values,
     get_metadata_tier_counts,
+    get_province_availability,
     get_province_coverage,
     get_quality_stats,
     get_school_chart_data,
@@ -98,6 +99,20 @@ def sidebar_filters(
 
 
 def page_home() -> None:
+    from configs.release import (
+        SOURCE_AWARE_PROVINCES,
+        STABLE_VERSION_LABEL,
+        STABLE_VERSION_NOTE,
+        STRUCTURED_PROVINCES,
+    )
+
+    st.info(
+        f"**{STABLE_VERSION_LABEL}**  \n"
+        f"Supported structured provinces: {' / '.join(STRUCTURED_PROVINCES)}  \n"
+        f"Source-aware provinces: {' / '.join(SOURCE_AWARE_PROVINCES)}  \n"
+        f"{STABLE_VERSION_NOTE}"
+    )
+
     st.title("高考录取线数据看板")
     st.caption("数据来源：SQLite（只读）")
 
@@ -119,8 +134,17 @@ def page_home() -> None:
     st.dataframe(overview, use_container_width=True, hide_index=True)
 
     st.divider()
+    st.subheader("Province Availability")
+    st.caption(
+        "各省数据源可机器读取性与入库状态（Phase 12.1 + 15）；"
+        "Access Status 表示官网访问模式，WAF/验证码/连接重置为预期环境限制，非 bug"
+    )
+    province_avail = get_province_availability()
+    st.dataframe(province_avail, use_container_width=True, hide_index=True)
+
+    st.divider()
     st.subheader("Province Coverage")
-    st.caption("多省插件注册状态（Phase 8）；与下方 DB 实际入库情况可对照查看")
+    st.caption("多省插件注册状态（Phase 8）；与上方可用性及下方 DB 实际入库情况可对照查看")
     province_cov = get_province_coverage()
     st.dataframe(province_cov, use_container_width=True, hide_index=True)
 

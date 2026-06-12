@@ -2,24 +2,58 @@
 
 国内高校各系招生分数线采集与整理工具。
 
+## Current Stable Version
+
+**MVP+ Stable**（`mvp-plus-stable`，Phase 16 冻结）
+
+- **已结构化可查询**：江苏（2021–2024 school）、浙江 / 山东 / 广东（2024 school；广东为普通类 PDF）
+- **Source-aware 已注册未结构化**：河南（`verification_required`）、福建（`waf_blocked`）、河北（`connection_reset`）
+- 这是 **MVP+ 稳定版本**，不是全国完整库；详见 [`docs/release_notes.md`](docs/release_notes.md)
+
+回归测试：
+
+```bash
+python scripts/run_regression.py
+# → data/cleaned/regression_report.json
+```
+
 **Phase 8** 起采用多省插件架构（`provinces/` + `province_registry.py`），核心 parse / normalize / validate 流水线全国共用，各省仅实现发现与解析入口。
 
 ## 项目目标
 
 爬取并结构化存储 **2025 年以前** 的高考录取线数据：
 
-- **已上线省份**：江苏省（2021–2024）、浙江省（2024 school）、山东省（2024 school）、河南省（2024 school）、广东省（2024 school）
+- **已入库可查询**：江苏省（2021–2024）、浙江省（2024 school）、山东省（2024 school）
+- **已发现/下载未入库**：河南省（2024 school；RAR/图片 Word）
+- **部分已入库**：广东省（2024 school 普通类历史/物理；机器可读 PDF；艺体类暂不建模）
+- **已注册待采集**：福建省（2024 school 普通类；Excel/PDF；艺体类 skipped_unsupported_category）、河北省（2024 school 普通类本科/专科；Excel/PDF；艺体/对口 skipped_unsupported_category）
 - **能力**：数据采集 → 解析清洗 → SQLite 存储 → Dashboard 可视化
 
 ## Roadmap
 
 | 省份 | 状态 |
 |------|------|
-| 江苏 | 已完成（2021–2024 school / rank / control） |
-| 浙江 | 已完成（2024 school） |
-| 山东 | 已完成（2024 school） |
-| 河南 | 已完成（2024 school，legacy 文科/理科；官方数据中心需验证码时不绕过） |
-| 广东 | 已完成（2024 school，new_gaokao 历史类/物理类；官方附件多为 PDF/ZIP） |
+| 江苏 | 已入库（2021–2024 school / rank / control） |
+| 浙江 | 已入库（2024 school） |
+| 山东 | 已入库（2024 school） |
+| 河南 | 已下载未入库（2024 school；RAR/图片 Word；官方验证码页不绕过） |
+| 广东 | 部分已入库（2024 school 普通类；艺体类 skipped_unsupported_category） |
+| 福建 | 已注册（2024 school 普通类本科/专科；艺体类 skipped_unsupported_category） |
+| 河北 | 已注册（2024 school 普通类本科/专科；专业粒度；艺体/对口 skipped_unsupported_category） |
+
+### 当前省份数据状态（Phase 12.1）
+
+以下与 `configs/province_data_availability.py`、Dashboard「Province Availability」及 `GET /province-availability` 一致。
+
+| 省份 | 年份 | 可结构化 | 数据格式 | 入库状态 | 查询模式 | Access Status | 说明 |
+|------|------|----------|----------|----------|----------|---------------|------|
+| 江苏 | 2021–2024 | 是 | Excel | 已入库 | 按分数 | available | school / rank / control 均已入库 |
+| 浙江 | 2024 | 是 | Excel | 已入库 | 按分数 | available | 普通类一、二段平行投档 Excel 已入库 |
+| 山东 | 2024 | 是 | Excel | 已入库 | 按位次 | available | 常规批投档表以 min_rank 为主 |
+| 河南 | 2024 | 否 | RAR + image Word + verification page | 已下载未入库 | 不支持（PDF/图片源） | verification_required | 公开 RAR 内为图片型 Word；官方数据中心需验证码 |
+| 广东 | 2024 | 部分 | ZIP + machine-readable PDF | 部分已入库 | 按分数 | partial | 普通类历史/物理已入库；艺体类已下载但暂不建模 |
+| 福建 | 2024 | 是 | Excel / PDF | 未开始 | 按分数 | waf_blocked | 普通类本科/专科投档；艺体类 skipped_unsupported_category |
+| 河北 | 2024 | 是 | Excel / PDF | 未开始 | 按分数 | connection_reset | 普通类本科/专科专业粒度；艺体/对口 skipped_unsupported_category |
 
 新增省份：在 `provinces/<name>/` 实现 `ProvincePlugin` 并注册到 `province_registry.py`，无需修改核心解析层。
 
@@ -32,13 +66,23 @@ gaokao-admission-crawler/
 ├── config.py              # 全局配置（请求、列名映射等）
 ├── main.py                # CLI 入口（经 province_registry 调度）
 ├── province_registry.py   # 省份插件注册表
+├── sources/               # Phase 15 数据源适配层
+│   ├── base.py            # SourceType / AccessStatus / SourceAdapter
+│   ├── html_site.py       # HTML_LIST（江苏、山东）
+│   ├── seed_site.py       # SEED_ONLY（浙江、福建、河北）
+│   ├── attachment_site.py # 附件直链 seed
+│   ├── archive_site.py    # ARCHIVE（广东 ZIP、河南 RAR）
+│   ├── protected_site.py  # PROTECTED（河南 datacenter 等）
+│   └── registry.py        # 省份 → SourceAdapter 工厂
 ├── provinces/             # Phase 8 多省插件
 │   ├── base.py            # ProvincePlugin / SubjectMode
 │   ├── jiangsu/           # 江苏（已完成）
 │   ├── zhejiang/          # 浙江（2024 school 已完成）
 │   ├── shandong/          # 山东（2024 school 已完成）
 │   ├── henan/             # 河南（2024 school，Phase 11）
-│   └── guangdong/         # 广东（2024 school，Phase 12）
+│   ├── guangdong/         # 广东（2024 school，Phase 12）
+│   ├── fujian/            # 福建（2024 school，Phase 14）
+│   └── hebei/             # 河北（2024 school，Phase 14.1）
 ├── crawlers/              # 爬虫、数据源注册、自动发现
 │   └── discovery.py
 ├── parsers/               # HTML / Excel / PDF 解析
@@ -278,6 +322,7 @@ uvicorn app.api:app --reload
 | GET | `/ranks` | 一分一段表查询 |
 | GET | `/controls` | 省控线查询 |
 | GET | `/stats/summary` | 数据库汇总统计 |
+| GET | `/province-availability` | 各省数据源可机器读取性、入库状态与 `access_status`（Phase 15） |
 | GET | `/convert/score-to-rank` | 分数查位次 |
 | GET | `/convert/rank-to-score` | 位次查分数 |
 | GET | `/convert/equivalent-score` | 跨年等效分换算 |
@@ -295,6 +340,7 @@ http://127.0.0.1:8000/ranks?year=2024&province=江苏&subject_type=物理类
 http://127.0.0.1:8000/ranks?year=2024&province=江苏&subject_type=物理类&score=650
 http://127.0.0.1:8000/controls?year=2024&province=江苏
 http://127.0.0.1:8000/stats/summary
+http://127.0.0.1:8000/province-availability
 ```
 
 ## Phase 6：位次换算（Rank Conversion）
@@ -569,7 +615,7 @@ python main.py import-excel data/raw/jiangsu/2024/school/attachments/xxx.xlsx --
 - 旧版 `crawl-jiangsu` 仍从索引页发现链接，受 robots.txt 限制可能无法访问
 - 默认 **最多下载 1 个文件**，避免对目标站点造成压力
 - Excel 列名映射覆盖常见表头，特殊格式需扩展 `config.EXCEL_COLUMN_ALIASES`
-- PDF 解析为占位实现，需安装 `pdfplumber` 后在下阶段完善
+- PDF 机器可读表格解析见 Phase 13（`parse_pdf_tables`，无 OCR）
 - API 仅提供查询，不含写入与推荐
 
 ## Phase 7：真实数据补全与导入流程固化
@@ -717,6 +763,8 @@ python main.py data-quality --province 山东 --year 2024
 | 山东 | rank | `/schools/by-rank` |
 | 河南 | score | `/schools/by-score` |
 | 广东 | mixed | 视 Excel 入库后空值率自动推荐 |
+| 福建 | score | `/schools/by-score` |
+| 河北 | score | `/schools/by-score` |
 
 - `data-quality` 输出 `min_score_null_rate`、`min_rank_null_rate`、`recommended_query_mode`
 - `/schools/by-score` 当该省该年 `min_score` 空值率 > 80% 时返回 400，提示改用 rank 查询
@@ -749,7 +797,8 @@ python main.py data-quality --province 河南 --year 2024
 **数据源策略**：
 
 - 2024 年官方本科/专科投档公告附件多为 **ZIP 包（内含 PDF）** 或独立 PDF
-- Excel 附件自动下载并尝试导入；**PDF/图片仅下载**，标记 `downloaded_not_imported`（不做 OCR）
+- Excel / 机器可读 PDF 经 `parse_pdf_tables` 解析；**当前仅 `admission_category=普通类` 入库**（不做 OCR）
+- 艺术/体育类 PDF 可下载，标记 `skipped_unsupported_category`，不算 `failed`
 - ZIP 下载后自动解压，子文件按扩展名分别处理
 
 ```bash
@@ -758,11 +807,152 @@ python main.py discover-download-import --province 广东 --years 2024 --type sc
 python main.py data-quality --province 广东 --year 2024
 ```
 
+### Phase 12.1：省份数据可用性 / 可机器读取性评估
+
+在插件注册（Province Coverage）与 DB 行数统计之外，增加**静态可用性矩阵**，避免用户误以为河南/广东已可查询。
+
+- 配置：`configs/province_data_availability.py`
+- Dashboard 首页：**Province Availability** 表
+- API：`GET /province-availability`
+
+河南标记为 `downloaded_not_imported`；广东普通类为 `imported_partial`，艺体类为 `skipped_unsupported_category`，**不视为流水线失败**。
+
+```bash
+curl http://127.0.0.1:8000/province-availability
+```
+
+### Phase 13：PDF 表格解析（机器可读，无 OCR）
+
+支持 `school` / `control` / `rank`，解析链：
+
+```text
+PDF → 检测可提取文本
+  → pdfplumber → camelot → tabula
+  → 成功: parsed → normalize → validate → 入库
+  → 失败: unsupported_pdf_table
+```
+
+- 实现：`parsers/parse_pdf_tables.py`（`parse_pdf_tables()`）
+- 流水线：`importers/pipeline.run_pdf_pipeline()`
+- 广东插件：`parse_school` 对 `.pdf` 优先走 PDF 解析
+- 依赖：`pdfplumber`（必选）；`camelot-py` / `tabula-py` 为可选回退
+
+```bash
+pip install pdfplumber
+# 可选回退
+# pip install "camelot-py[cv]" tabula-py
+```
+
+### Phase 13.1：广东 PDF 普通类收敛与艺体类隔离
+
+广东 PDF 表格解析（Phase 13）已成功，但艺体类投档表字段体系与 `历史类/物理类` 普通类不同，**当前阶段不强行入库**。
+
+- `provinces/guangdong/metadata.py`：从文件名识别 `admission_category`（普通类 / 体育类 / 艺术类）
+- `discover-download-import --province 广东 --type school`：**仅导入普通类**
+- 艺体类：下载 → 可选解析 → **不入库** → `skipped_unsupported_category`（非 `failed`）
+- Summary 新增列 `skip_cat`（`skipped_unsupported_category`）
+
+```bash
+python main.py discover-download-import --province 广东 --years 2024 --type school --max-pages 50
+python main.py data-quality --province 广东 --year 2024
+```
+
+预期：普通类 PDF `imported=4`、`failed=0`、艺体类计入 `skip_cat`、广东 school 约 215 条。
+
+### Phase 14：福建 school（2024）
+
+福建为 **new_gaokao** 模式，`subject_type = 历史类 / 物理类`。仅 **普通类** 本科批 / 专科批投档线入库。
+
+**发现与解析**：
+
+- 插件：`provinces/fujian/`（`html_list` + `seed_announcements`）
+- 关键词：普通类本科批 / 高职专科批、院校专业组投档最低分、历史/物理科目组
+- Excel → `parse_excel`；机器可读 PDF → `parse_pdf_tables`
+- 艺体类 → `skipped_unsupported_category`（非 `failed`）
+
+**字段映射**（福建常见表头）：院校代号、院校名称、院校专业组、投档最低分、投档最低位次、计划数等。
+
+```bash
+python main.py discover-sources --province 福建 --years 2024 --type school --max-pages 50
+python main.py discover-download-import --province 福建 --years 2024 --type school --max-pages 50
+python main.py data-quality --province 福建 --year 2024
+```
+
+可在 `provinces/fujian/config.py` 的 `SEED_ANNOUNCEMENTS` 中手工增补福建省教育考试院公告 URL。若官网返回 403（WAF），需在本机网络可访问时再执行下载，或直接在 seed 中配置附件直链。
+
+### Phase 14.1：河北 school（2024）
+
+河北为 **new_gaokao** 模式，`subject_type = 历史类 / 物理类`。仅 **普通类** 本科批 / 专科批投档线入库（专业粒度：`major_group = major_code + '-' + major_name`）。
+
+**发现与解析**：
+
+- 插件：`provinces/hebei/`（`html_list` + `seed_announcements`，支持 `attachment_url` 附件直链）
+- 关键词：本科/专科批平行志愿投档情况统计、历史/物理科目组合
+- Excel → `parse_excel`；机器可读 PDF → `parse_pdf_tables`
+- 艺体类 / 对口类 → `skipped_unsupported_category`（非 `failed`）
+
+**字段映射**（河北常见表头）：院校代号、院校名称、专业代号、专业名称、投档最低分、投档最低位次、计划数等。
+
+```bash
+python main.py discover-sources --province 河北 --years 2024 --type school --max-pages 50
+python main.py discover-download-import --province 河北 --years 2024 --type school --max-pages 50
+python main.py data-quality --province 河北 --year 2024
+```
+
+可在 `provinces/hebei/config.py` 的 `SEED_ANNOUNCEMENTS` 中手工增补河北省教育考试院公告 URL 或 `attachment_url` 直链。若 `www.hebeea.edu.cn` 连接被重置，可在本机网络可访问时再执行下载，或直接在 seed 中配置 `file.hebeea.edu.cn` 附件直链。
+
+### Phase 15：Source Adapter（数据源适配层）
+
+统一处理各省考试院不同的访问模式；**WAF / 验证码 / 连接重置是预期环境限制，不是 bug**。
+
+**SourceType 与省份**：
+
+| SourceType | 省份 | 说明 |
+|------------|------|------|
+| `HTML_LIST` | 江苏、山东 | 扫描列表页发现公告 |
+| `SEED_ONLY` | 浙江、福建、河北 | seed 公告 + 可选列表页 |
+| `ARCHIVE` | 广东（ZIP）、河南（RAR） | 归档包下载后解压 |
+| `PROTECTED` | 河南 datacenter | 验证码查询页，不绕过 |
+
+**Access Status**（Dashboard / `GET /province-availability` 字段 `access_status`）：
+
+| 状态 | 含义 |
+|------|------|
+| `available` | 官网可正常访问下载 |
+| `partial` | 部分附件可机器读取（如广东普通类 PDF） |
+| `waf_blocked` | WAF 拦截（如福建 eeafj.cn） |
+| `verification_required` | 需验证码（如河南 datacenter） |
+| `connection_reset` | TCP 连接被重置（如河北 hebeea.edu.cn） |
+| `unsupported_archive` | 归档内为图片/不可解析格式 |
+| `unsupported_pdf` | PDF 不可表格化 |
+
+**插件接入**：`ProvincePlugin.source_adapter` 返回对应 `SourceAdapter`，提供 `discover()` / `download()` / `check_availability()` / `get_status()`。
+
+```python
+from province_registry import get_province_plugin
+adapter = get_province_plugin("福建").source_adapter
+print(adapter.get_status())  # waf_blocked
+```
+
+### Phase 16：Stabilization / 回归测试 / 作品集版本冻结
+
+冻结 **MVP+ Stable**（`mvp-plus-stable`），不新增省份 / parser。
+
+- 回归脚本：`scripts/run_regression.py`
+- 报告：`data/cleaned/regression_report.json`
+- 发布说明：[`docs/release_notes.md`](docs/release_notes.md)
+
+```bash
+python scripts/run_regression.py
+```
+
+覆盖：`data-quality`（苏浙鲁粤 2024）、FastAPI TestClient、Dashboard smoke test。
+
 ## 后续计划
 
 1. 浙鲁 `major_admission_line` 专业粒度入库
 2. 增加 `/majors` 专业录取线查询接口
-3. PDF / HTML 表格解析与入库（广东 2024 官方 PDF 投档表）
+3. 广东扫描件 PDF 仍不支持（无 OCR）；可继续扩充 PDF 表头识别规则
 
 ## 合规说明
 

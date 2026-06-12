@@ -12,6 +12,7 @@ import pandas as pd
 
 from normalizers import normalize_dataframe
 from parsers.parse_excel import parse_excel
+from parsers.parse_pdf_tables import parse_pdf_tables
 from parsers.subject_infer import infer_subject_from_filename
 from validators.validate import ValidationResult, validate_dataframe
 
@@ -85,6 +86,42 @@ def run_excel_pipeline(
         normalized_df=normalized,
         validation=validation,
         source_path=path,
+    )
+
+
+def run_pdf_pipeline(
+    file_path: str | Path,
+    data_type: str,
+    year: int | None = None,
+    province: str = "江苏",
+    subject_type_hint: str | None = None,
+    subject_mode: object | None = None,
+) -> PipelineResult:
+    """PDF parse → normalize → validate（机器可读表格，无 OCR）。"""
+    path = Path(file_path)
+    hint = subject_type_hint
+
+    result = parse_pdf_tables(
+        path,
+        data_type=data_type,
+        default_year=year,
+        default_province=province,
+        subject_type_hint=hint,
+        subject_mode=subject_mode,
+    )
+    if not result.ok:
+        raise ValueError(
+            f"PDF 表格不可机器读取: {result.status} ({result.message})"
+        )
+
+    return run_parsed_pipeline(
+        result.df,
+        data_type=data_type,
+        year=year,
+        province=province,
+        subject_type=hint,
+        source_path=path,
+        subject_mode=subject_mode,
     )
 
 

@@ -94,6 +94,25 @@ class StatsSummaryResponse(BaseModel):
     provinces_available: list[str]
 
 
+class ProvinceAvailabilityItem(BaseModel):
+    province: str
+    year: int
+    school_discovery_status: str
+    school_download_status: str
+    school_import_status: str
+    source_format: str
+    machine_readable: bool
+    query_mode: str
+    notes: str
+    access_status: str
+    machine_readable_level: str | None = None
+
+
+class ProvinceAvailabilityResponse(BaseModel):
+    total: int
+    items: list[ProvinceAvailabilityItem]
+
+
 class ScoreToRankResponse(BaseModel):
     year: int
     province: str

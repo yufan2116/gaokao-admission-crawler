@@ -97,7 +97,7 @@ JIANGSU_DISCOVERY_YEARS = [2021, 2022, 2023, 2024]
 
 DATA_ATTACHMENT_EXTENSIONS = {".xlsx", ".xls", ".pdf", ".rar", ".zip"}
 CONTROL_EXTRA_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-NON_IMPORTABLE_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png"}
+NON_IMPORTABLE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
 UI_ASSET_MARKERS = ("icon-", "logo", "resource-", "print.png", "wx.jpg", "school-logo", "/images/")
 
 
@@ -160,7 +160,7 @@ def classify_suggested_type(title: str) -> str:
     if any(k in title for k in ("逐分段", "一分一段", "分段统计", "高考成绩分段")):
         return "rank"
     if any(ex in title for ex in CONTROL_TITLE_EXCLUSIONS):
-        if "投档线" in title:
+        if "投档线" in title or "投档情况" in title:
             return "school"
         return "unknown"
     if "投档线" in title and "控制分数线" in title:
@@ -178,8 +178,12 @@ def classify_suggested_type(title: str) -> str:
             "平行投档分数线",
             "投档情况表",
             "投档情况",
+            "投档情况统计",
+            "平行志愿投档",
             "投档分数线表",
             "投档分数线",
+            "投档最低分",
+            "院校专业组",
             "正式投档",
         )
     ):
@@ -291,9 +295,9 @@ def infer_subject_type_from_title(
         if "理科" in text:
             return "理科"
         return None
-    if any(k in text for k in ("历史等科目", "历史类", "文科")):
+    if any(k in text for k in ("历史科目组合", "历史科目组", "历史等科目", "历史类", "文科")):
         return "历史类"
-    if any(k in text for k in ("物理等科目", "物理类", "理科")):
+    if any(k in text for k in ("物理科目组合", "物理科目组", "物理等科目", "物理类", "理科")):
         return "物理类"
     if "历史" in text and "物理" not in text:
         return "历史类"
@@ -634,6 +638,12 @@ def _records_for_extracted_archive(
     return records
 
 
+def _is_verification_blocked_access(status: str | None) -> bool:
+    from sources.base import AccessStatus, normalize_access_status
+
+    return normalize_access_status(status) == AccessStatus.VERIFICATION_REQUIRED
+
+
 def download_discovered_attachments(
     sources: list[dict[str, Any]],
     year: int,
@@ -659,12 +669,12 @@ def download_discovered_attachments(
     had_403 = False
 
     for source in sources:
-        if source.get("access_status") == "unsupported_verification_required":
+        if _is_verification_blocked_access(source.get("access_status")):
             downloads.append(
                 {
                     "source_title": source.get("title"),
                     "page_url": source.get("page_url"),
-                    "status": "unsupported_verification_required",
+                    "status": "verification_required",
                     "kind": "source_blocked",
                     "importable": False,
                 }
@@ -819,6 +829,7 @@ def _build_year_summary(
         "failed": len(imp.get("failed", [])) + dl_summary.get("failed", 0),
         "downloaded_not_imported": len(imp.get("downloaded_not_imported", []))
         or dl_summary.get("downloaded_not_imported", 0),
+        "skipped_unsupported_category": len(imp.get("skipped_unsupported_category", [])),
         "error": error,
     }
 
@@ -866,6 +877,7 @@ def import_downloaded_files(
     imported: list[str] = []
     skipped: list[str] = []
     skipped_wrong_type: list[str] = []
+    skipped_unsupported_category: list[str] = []
     failed: list[str] = []
     downloaded_not_imported: list[str] = []
     errors_detail: list[dict[str, Any]] = []
@@ -884,7 +896,7 @@ def import_downloaded_files(
         items.sort(key=_sort_key)
 
     for item in items:
-        if item.get("status") == "unsupported_verification_required":
+        if _is_verification_blocked_access(item.get("status")):
             continue
         if item.get("status") not in ("downloaded", "skipped"):
             if item.get("status") == "failed":
@@ -928,16 +940,83 @@ def import_downloaded_files(
         plugin = get_province_plugin(province)
         legacy = plugin.subject_mode == SubjectMode.LEGACY
         subject_type = infer_subject_type_from_title(subject_hint, legacy=legacy)
+        if plugin.province_slug == "fujian":
+            from provinces.fujian.metadata import infer_fujian_subject_type
+
+            subject_type = infer_fujian_subject_type(subject_hint) or subject_type
+        elif plugin.province_slug == "hebei":
+            from provinces.hebei.metadata import infer_hebei_subject_type
+
+            subject_type = infer_hebei_subject_type(subject_hint) or subject_type
         if not subject_type:
             subject_type = plugin.default_subject_type or None
-        school_meta = (
-            infer_school_metadata_from_title(
-                subject_hint,
-                source_title=item.get("source_title"),
-            )
-            if data_type == "school"
-            else {}
-        )
+        school_meta: dict[str, str] = {}
+        if data_type == "school":
+            if plugin.province_slug == "guangdong":
+                from provinces.guangdong.metadata import (
+                    infer_guangdong_school_metadata,
+                    is_guangdong_importable_category,
+                )
+
+                school_meta = infer_guangdong_school_metadata(
+                    subject_hint,
+                    source_title=item.get("source_title"),
+                )
+                if not is_guangdong_importable_category(
+                    school_meta.get("admission_category")
+                ):
+                    skipped_unsupported_category.append(str(path))
+                    logger.info(
+                        "广东当前仅导入普通类，跳过 %s (%s)",
+                        path.name,
+                        school_meta.get("admission_category"),
+                    )
+                    continue
+            elif plugin.province_slug == "fujian":
+                from provinces.fujian.metadata import (
+                    infer_fujian_school_metadata,
+                    is_fujian_importable_category,
+                )
+
+                school_meta = infer_fujian_school_metadata(
+                    subject_hint,
+                    source_title=item.get("source_title"),
+                )
+                if not is_fujian_importable_category(
+                    school_meta.get("admission_category")
+                ):
+                    skipped_unsupported_category.append(str(path))
+                    logger.info(
+                        "福建当前仅导入普通类，跳过 %s (%s)",
+                        path.name,
+                        school_meta.get("admission_category"),
+                    )
+                    continue
+            elif plugin.province_slug == "hebei":
+                from provinces.hebei.metadata import (
+                    infer_hebei_school_metadata,
+                    is_hebei_importable_category,
+                )
+
+                school_meta = infer_hebei_school_metadata(
+                    subject_hint,
+                    source_title=item.get("source_title"),
+                )
+                if not is_hebei_importable_category(
+                    school_meta.get("admission_category")
+                ):
+                    skipped_unsupported_category.append(str(path))
+                    logger.info(
+                        "河北当前仅导入普通类，跳过 %s (%s)",
+                        path.name,
+                        school_meta.get("admission_category"),
+                    )
+                    continue
+            else:
+                school_meta = infer_school_metadata_from_title(
+                    subject_hint,
+                    source_title=item.get("source_title"),
+                )
 
         def _record_error(msg: str) -> None:
             try:
@@ -1002,6 +1081,7 @@ def import_downloaded_files(
         "imported": imported,
         "skipped": skipped,
         "skipped_wrong_type": skipped_wrong_type,
+        "skipped_unsupported_category": skipped_unsupported_category,
         "failed": failed,
         "downloaded_not_imported": downloaded_not_imported,
         "errors_detail": errors_detail,

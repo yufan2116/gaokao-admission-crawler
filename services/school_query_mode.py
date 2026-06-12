@@ -19,6 +19,8 @@ PROVINCE_DEFAULT_QUERY_MODE: dict[str, str] = {
     "山东": "rank",
     "河南": "score",
     "广东": "mixed",
+    "福建": "score",
+    "河北": "score",
 }
 
 SCORE_QUERY_UNAVAILABLE_MSG = (

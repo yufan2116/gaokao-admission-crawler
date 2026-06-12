@@ -10,6 +10,7 @@ from parsers.parse_excel import (
 )
 from parsers.parse_html import extract_download_links, extract_links
 from parsers.parse_pdf import parse_pdf_file
+from parsers.parse_pdf_tables import PdfTableParseResult, parse_pdf_tables
 
 __all__ = [
     "extract_links",
@@ -22,4 +23,6 @@ __all__ = [
     "inspect_excel_file",
     "format_inspect_report",
     "parse_pdf_file",
+    "parse_pdf_tables",
+    "PdfTableParseResult",
 ]

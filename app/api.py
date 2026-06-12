@@ -34,6 +34,8 @@ from app.schemas import (
     SchoolsByScoreInput,
     SchoolsByScoreResponse,
     ScoreToRankResponse,
+    ProvinceAvailabilityItem,
+    ProvinceAvailabilityResponse,
     StatsSummaryResponse,
 )
 from app.services import (
@@ -446,3 +448,17 @@ def stats_summary(db: Session = Depends(get_db)) -> StatsSummaryResponse:
     """数据库汇总统计。"""
     data = query_stats_summary(db)
     return StatsSummaryResponse(**data)
+
+
+@app.get(
+    "/province-availability",
+    response_model=ProvinceAvailabilityResponse,
+    tags=["stats"],
+)
+def province_availability() -> ProvinceAvailabilityResponse:
+    """各省数据源可机器读取性与入库状态（静态配置，Phase 12.1）。"""
+    from configs.province_data_availability import get_province_data_availability
+
+    rows = get_province_data_availability()
+    items = [ProvinceAvailabilityItem(**row) for row in rows]
+    return ProvinceAvailabilityResponse(total=len(items), items=items)

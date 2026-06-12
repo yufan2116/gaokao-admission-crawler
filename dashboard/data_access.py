@@ -105,6 +105,13 @@ def get_province_coverage() -> pd.DataFrame:
     return pd.DataFrame(get_province_coverage_rows())
 
 
+def get_province_availability() -> pd.DataFrame:
+    """各省数据源可机器读取性与入库状态（静态，Phase 12.1）。"""
+    from configs.province_data_availability import get_province_availability_display_rows
+
+    return pd.DataFrame(get_province_availability_display_rows())
+
+
 def get_school_null_rates(
     year: int | None,
     province: str | None,

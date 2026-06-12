@@ -15,6 +15,7 @@ from parsers.import_debug import write_import_debug_preview
 from parsers.parse_doc import is_image_based_doc
 from parsers.parse_excel import parse_excel, parse_excel_all_sheets
 from parsers.parse_html_tables import parse_html_tables
+from parsers.parse_pdf_tables import parse_pdf_tables
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +23,8 @@ EXCEL_EXTENSIONS = {".xlsx", ".xls"}
 HTML_EXTENSIONS = {".html", ".htm"}
 DOC_EXTENSIONS = {".doc"}
 ARCHIVE_EXTENSIONS = {".rar"}
-UNSUPPORTED_EXTENSIONS = {".pdf", ".jpg", ".jpeg", ".png", ".gif"}
+UNSUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif"}
+PDF_EXTENSIONS = {".pdf"}
 
 
 class UnsupportedImportFormatError(Exception):
@@ -73,6 +75,22 @@ def _parse_file_to_dataframe(
             default_province=default_province,
             subject_type_hint=subject_type,
         )
+    if ext in PDF_EXTENSIONS:
+        if record_type not in ("school", "control", "rank"):
+            raise ValueError(f"PDF 导入暂仅支持 school/control/rank，当前 type={record_type}")
+        pdf_result = parse_pdf_tables(
+            path,
+            data_type=record_type,
+            default_year=default_year,
+            default_province=default_province,
+            subject_type_hint=subject_type,
+            subject_mode=subject_mode,
+        )
+        if not pdf_result.ok:
+            raise UnsupportedImportFormatError(
+                f"PDF 表格不可机器读取: {pdf_result.status}（{pdf_result.message}）"
+            )
+        return pdf_result.df
     if ext in UNSUPPORTED_EXTENSIONS:
         raise UnsupportedImportFormatError(f"暂不支持导入: {ext}（已下载可标记 downloaded_not_imported）")
     raise ValueError(f"未知文件类型: {ext}")
@@ -172,7 +190,7 @@ def is_importable_file(path: Path) -> bool:
     ext = path.suffix.lower()
     if ext in DOC_EXTENSIONS and is_image_based_doc(path):
         return False
-    return ext in EXCEL_EXTENSIONS or ext in HTML_EXTENSIONS
+    return ext in EXCEL_EXTENSIONS or ext in HTML_EXTENSIONS or ext in PDF_EXTENSIONS
 
 
 def is_download_only_file(path: Path) -> bool:

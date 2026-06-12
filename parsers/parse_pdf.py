@@ -1,8 +1,5 @@
 """
-PDF 解析占位模块。
-
-pdfplumber 为可选依赖，未安装时给出友好提示。
-MVP 阶段不强依赖 PDF 解析。
+PDF 解析入口（Phase 13 委托至 parse_pdf_tables）。
 """
 
 from __future__ import annotations
@@ -11,28 +8,27 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from parsers.parse_pdf_tables import parse_pdf_tables
+
 logger = logging.getLogger(__name__)
 
 
-def parse_pdf_file(file_path: str | Path) -> list[dict[str, Any]]:
+def parse_pdf_file(
+    file_path: str | Path,
+    data_type: str = "school",
+    **kwargs: Any,
+) -> list[dict[str, Any]]:
     """
-    解析 PDF 表格（占位实现）。
+    解析 PDF 表格，返回记录列表（兼容旧接口）。
 
-    Returns:
-        解析出的记录列表；当前返回空列表并记录日志。
+    内部调用 parse_pdf_tables；失败时返回空列表。
     """
-    path = Path(file_path)
-    if not path.exists():
-        raise FileNotFoundError(f"文件不存在: {path}")
-
-    try:
-        import pdfplumber  # noqa: F401
-    except ImportError:
-        logger.warning(
-            "pdfplumber 未安装，跳过 PDF 解析。可执行: pip install pdfplumber"
+    result = parse_pdf_tables(file_path, data_type=data_type, **kwargs)
+    if not result.ok:
+        logger.info(
+            "PDF 解析未成功 [%s]: status=%s",
+            Path(file_path).name,
+            result.status,
         )
         return []
-
-    logger.info("PDF 解析尚未实现，文件: %s", path)
-    # TODO: 下一阶段用 pdfplumber 提取表格
-    return []
+    return result.df.to_dict(orient="records")
