@@ -14,6 +14,9 @@ data/raw/*
 !data/raw/.gitkeep
 data/cleaned/*
 !data/cleaned/.gitkeep
+data/export/*
+!data/export/.gitkeep
+!data/export/csv/.gitkeep
 *.db
 *.sqlite3
 

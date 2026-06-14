@@ -12,6 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 CLEANED_DIR = DATA_DIR / "cleaned"
+EXPORT_CSV_DIR = DATA_DIR / "export" / "csv"
 OCR_CACHE_DIR = DATA_DIR / "cache" / "ocr"
 
 # SQLite 数据库路径

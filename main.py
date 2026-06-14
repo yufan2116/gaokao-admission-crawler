@@ -956,6 +956,35 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export_csv(args: argparse.Namespace) -> int:
+    """按省份分目录导出 CSV。"""
+    from config import EXPORT_CSV_DIR
+    from services.province_csv_export import export_province_csv
+
+    record_types = getattr(args, "type", None) or ["school"]
+    if isinstance(record_types, str):
+        record_types = [record_types]
+
+    provinces = getattr(args, "provinces", None)
+    if provinces:
+        provinces = [normalize_province(p) for p in provinces]
+
+    years = getattr(args, "years", None)
+    output_dir = Path(args.output_dir) if getattr(args, "output_dir", None) else EXPORT_CSV_DIR
+    split_by_year = not getattr(args, "merge_years", False)
+
+    report = export_province_csv(
+        output_dir=output_dir,
+        record_types=record_types,
+        provinces=provinces,
+        years=years,
+        split_by_year=split_by_year,
+    )
+    for line in report.to_lines():
+        print(line)
+    return 0 if report.total_rows else 1
+
+
 def cmd_clean_ocr_dirty_data(args: argparse.Namespace) -> int:
     """清理 OCR 实验来源的脏 school 记录（默认 dry-run）。"""
     from parsers.parse_image_table import OCR_SOURCE_PREFIX
@@ -1324,6 +1353,41 @@ def build_parser() -> argparse.ArgumentParser:
     dq_p.add_argument("--year", type=int, required=True, help="年份，如 2024")
     dq_p.add_argument("--province", default=DEFAULT_PROVINCE, help="省份（默认：江苏）")
 
+    export_csv_p = sub.add_parser(
+        "export-csv",
+        help="按省份分目录导出 CSV 至 data/export/csv/{省份}/",
+    )
+    export_csv_p.add_argument(
+        "--type",
+        dest="type",
+        action="append",
+        choices=["school", "major", "control", "rank"],
+        help="数据类型，可重复指定；默认 school",
+    )
+    export_csv_p.add_argument(
+        "--provinces",
+        nargs="*",
+        default=None,
+        help="省份列表，默认导出库中全部有数据的省份",
+    )
+    export_csv_p.add_argument(
+        "--years",
+        type=int,
+        nargs="*",
+        default=None,
+        help="年份列表，默认全部年份",
+    )
+    export_csv_p.add_argument(
+        "--output-dir",
+        default=None,
+        help="输出根目录，默认 data/export/csv",
+    )
+    export_csv_p.add_argument(
+        "--merge-years",
+        action="store_true",
+        help="不按年份拆分，每省每类型仅一个 CSV",
+    )
+
     clean_ocr_p = sub.add_parser(
         "clean-ocr-dirty-data",
         help="清理 OCR 实验来源的脏 school 记录（默认 dry-run）",
@@ -1498,6 +1562,7 @@ def main() -> int:
         "extract-attachments-local": cmd_extract_attachments_local,
         "download-attachment": cmd_download_attachment,
         "data-quality": cmd_data_quality,
+        "export-csv": cmd_export_csv,
         "clean-ocr-dirty-data": cmd_clean_ocr_dirty_data,
         "discover-sources": cmd_discover_sources,
         "discover-and-download": cmd_discover_and_download,
