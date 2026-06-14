@@ -92,9 +92,14 @@ gaokao-admission-crawler/
 ├── dashboard/             # Streamlit 可视化
 ├── app/                   # FastAPI 查询与换算接口
 ├── services/
+│   ├── national_scan.py       # Phase 17 全国扫描
+│   └── province_csv_export.py # Phase 21 分省 CSV 导出
 ├── configs/
 ├── docs/
 ├── data/
+│   ├── raw/                   # 原始下载
+│   ├── cleaned/               # 清洗/报告 JSON
+│   └── export/csv/            # 分省 CSV 导出（gitignore，本地生成）
 └── scripts/
 ```
 
@@ -1280,6 +1285,45 @@ python main.py verify-images data/raw/hubei/2024/school/attachments \
 - `ocr-batch-audit`：`corrupted_image` 状态，**无** `suspicious_flags`；`clean_ratio` 分母排除损坏图
 - `ocr-precompute`：跳过损坏图，报告 `skipped_corrupted_image`
 - `discover-download-import`：`skipped_corrupted_image += 1`，不入库，不算 `ocr_failed`
+
+### Phase 21：Province CSV Export（分省导出）
+
+从 SQLite 按省份分目录导出 UTF-8 BOM CSV，便于 Excel / 外部分析。导出文件**不入 Git**（`data/export/*` 已 gitignore）。
+
+**目录结构：**
+
+```
+data/export/csv/
+├── 江苏/
+│   ├── school_2023.csv
+│   └── school_2024.csv
+├── 湖北/
+│   └── school_2024.csv
+└── export_manifest.json    # 导出清单
+```
+
+**CLI：**
+
+```bash
+# 导出全部省份 school 数据（默认按年份拆分）
+python main.py export-csv --type school
+
+# 指定省份与年份
+python main.py export-csv --type school --provinces 江苏 湖北 --years 2024
+
+# 多种数据类型
+python main.py export-csv --type school --type control --type rank
+
+# 每省合并为一个文件（不按年份拆分）
+python main.py export-csv --type school --merge-years
+
+# 脚本入口（等价）
+python scripts/export_cleaned_csv.py --years 2024
+```
+
+**支持类型：** `school` / `major` / `control` / `rank`（列名为中文，与 Dashboard Excel 导出字段一致）。
+
+**配置：** `config.EXPORT_CSV_DIR`，默认 `data/export/csv`。
 
 ## 后续计划
 
