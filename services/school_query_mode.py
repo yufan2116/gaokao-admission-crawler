@@ -21,6 +21,7 @@ PROVINCE_DEFAULT_QUERY_MODE: dict[str, str] = {
     "广东": "mixed",
     "福建": "score",
     "河北": "score",
+    "湖北": "unsupported_pdf_or_image",
 }
 
 SCORE_QUERY_UNAVAILABLE_MSG = (

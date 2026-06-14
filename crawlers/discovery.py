@@ -22,6 +22,7 @@ from config import BASE_DIR, CLEANED_DIR, DEFAULT_PROVINCE, RAW_DIR
 from crawlers.filename_utils import sanitize_filename
 from crawlers.jiangsu import JiangsuCrawler
 from crawlers.sources_registry import DATA_TYPES
+from parsers.image_sort import natural_sort_key
 from parsers.parse_html import extract_links
 
 logger = logging.getLogger(__name__)
@@ -644,6 +645,37 @@ def _is_verification_blocked_access(status: str | None) -> bool:
     return normalize_access_status(status) == AccessStatus.VERIFICATION_REQUIRED
 
 
+def _collect_ocr_image_attachments(
+    crawler: Any,
+    source: dict[str, Any],
+) -> list[dict[str, str]]:
+    """从公告 HTML 提取 uploadfile 表格图片（仅 OCR 模式）。"""
+    from crawlers.jiangsu import _extract_attachments_from_html
+
+    page_url = (source.get("page_url") or "").strip()
+    if not page_url:
+        return []
+    try:
+        html = crawler.fetch_page(page_url)
+    except Exception as exc:
+        logger.warning("OCR 模式抓取页面失败 [%s]: %s", page_url, exc)
+        return []
+
+    raw = _extract_attachments_from_html(html, page_url)
+    images: list[dict[str, str]] = []
+    for att in raw:
+        url = (att.get("url") or "").strip()
+        path_lower = url.lower()
+        if not any(path_lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg")):
+            continue
+        if any(marker in path_lower for marker in UI_ASSET_MARKERS):
+            continue
+        if "uploadfile" not in path_lower and "/files/" not in path_lower:
+            continue
+        images.append(att)
+    return images
+
+
 def download_discovered_attachments(
     sources: list[dict[str, Any]],
     year: int,
@@ -651,6 +683,8 @@ def download_discovered_attachments(
     force: bool = False,
     crawler: JiangsuCrawler | None = None,
     province_slug: str = "jiangsu",
+    *,
+    enable_ocr: bool = False,
 ) -> dict[str, Any]:
     """
     下载已发现公告的附件。
@@ -691,7 +725,16 @@ def download_discovered_attachments(
                 if html_record:
                     downloads.append(html_record)
 
-        for att in source.get("attachments") or []:
+        attachments = list(source.get("attachments") or [])
+        if enable_ocr and data_type == "school":
+            has_data_file = any(
+                (a.get("url") or "").lower().endswith((".xlsx", ".xls", ".pdf"))
+                for a in attachments
+            )
+            if not has_data_file:
+                attachments.extend(_collect_ocr_image_attachments(crawler, source))
+
+        for att in attachments:
             url = (att.get("url") or "").strip()
             if not url or url in seen_attachment_urls:
                 continue
@@ -715,6 +758,9 @@ def download_discovered_attachments(
                 "importable": ext_lower not in NON_IMPORTABLE_EXTENSIONS
                 and ext_lower not in {".rar", ".zip", ".doc"},
             }
+            if enable_ocr and ext_lower in NON_IMPORTABLE_EXTENSIONS and data_type == "school":
+                record["importable"] = True
+                record["ocr"] = True
 
             if save_path.exists() and not force:
                 record["status"] = "skipped"
@@ -830,6 +876,11 @@ def _build_year_summary(
         "downloaded_not_imported": len(imp.get("downloaded_not_imported", []))
         or dl_summary.get("downloaded_not_imported", 0),
         "skipped_unsupported_category": len(imp.get("skipped_unsupported_category", [])),
+        "ocr_failed": len(imp.get("ocr_failed", [])),
+        "ocr_skipped": len(imp.get("ocr_skipped", [])),
+        "skipped_corrupted_image": len(imp.get("skipped_corrupted_image", [])),
+        "ocr_processed": imp.get("ocr_processed", 0),
+        "ocr_skipped_by_limit": imp.get("ocr_skipped_by_limit", 0),
         "error": error,
     }
 
@@ -858,12 +909,74 @@ def _file_looks_like_school_data(path: Path) -> bool:
     return any(marker in header_text for marker in SCHOOL_COLUMN_MARKERS)
 
 
+def _resolve_download_item_path(item: dict[str, Any]) -> Path | None:
+    local_path = item.get("local_path")
+    if not local_path:
+        return None
+    path = Path(local_path)
+    if not path.is_absolute():
+        path = BASE_DIR / path
+    return path
+
+
+def _is_ocr_download_item(item: dict[str, Any], *, enable_ocr: bool) -> bool:
+    if not enable_ocr or not item.get("ocr"):
+        return False
+    path = _resolve_download_item_path(item)
+    if path is None:
+        return False
+    return path.suffix.lower() in NON_IMPORTABLE_EXTENSIONS
+
+
+def _build_ocr_limit_allowed_paths(
+    items: list[dict[str, Any]],
+    *,
+    enable_ocr: bool,
+    ocr_limit: int | None,
+) -> tuple[set[Path] | None, set[Path]]:
+    """
+    按 (source_title, attachment_title, path) 排序后取前 N 个唯一图片路径。
+
+    Returns:
+        (allowed_paths, all_unique_ocr_paths)；无限制时 allowed_paths 为 None。
+    """
+    candidates: list[tuple[str, str, Path]] = []
+    seen: set[Path] = set()
+    for item in items:
+        if not _is_ocr_download_item(item, enable_ocr=enable_ocr):
+            continue
+        path = _resolve_download_item_path(item)
+        if path is None:
+            continue
+        resolved = path.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        candidates.append(
+            (
+                item.get("source_title") or "",
+                item.get("attachment_title") or path.name,
+                resolved,
+            )
+        )
+    candidates.sort(key=lambda t: (natural_sort_key(t[2]), t[0], t[1]))
+    all_paths = {p for _, _, p in candidates}
+    if not enable_ocr or ocr_limit is None or ocr_limit <= 0:
+        return None, all_paths
+    allowed = {p for _, _, p in candidates[:ocr_limit]}
+    return allowed, all_paths
+
+
 def import_downloaded_files(
     report: dict[str, Any],
     year: int,
     province: str,
     data_type: str,
     session,
+    *,
+    enable_ocr: bool = False,
+    ocr_limit: int | None = None,
+    ocr_engine: str = "paddle",
 ) -> dict[str, Any]:
     """根据下载结果调用 import-file pipeline。"""
     from importers.file_import import (
@@ -882,6 +995,11 @@ def import_downloaded_files(
     downloaded_not_imported: list[str] = []
     errors_detail: list[dict[str, Any]] = []
 
+    ocr_failed: list[str] = []
+    ocr_skipped: list[str] = []
+    skipped_corrupted_image: list[str] = []
+    ocr_processed_paths: set[Path] = set()
+
     def _sort_key(item: dict[str, Any]) -> int:
         kind = item.get("kind")
         if kind == "attachment":
@@ -894,6 +1012,17 @@ def import_downloaded_files(
     items = list(report.get("downloads") or [])
     if data_type in ("control", "rank"):
         items.sort(key=_sort_key)
+
+    ocr_allowed_paths, all_ocr_paths = _build_ocr_limit_allowed_paths(
+        items, enable_ocr=enable_ocr, ocr_limit=ocr_limit
+    )
+    if ocr_limit is not None and enable_ocr:
+        logger.info(
+            "OCR 限量导入: limit=%d unique_images=%d allowed=%d",
+            ocr_limit,
+            len(all_ocr_paths),
+            len(ocr_allowed_paths or ()),
+        )
 
     for item in items:
         if _is_verification_blocked_access(item.get("status")):
@@ -913,12 +1042,16 @@ def import_downloaded_files(
             failed.append(str(path))
             continue
 
-        if item.get("importable") is False or is_download_only_file(path):
+        if item.get("importable") is False or (
+            is_download_only_file(path) and not (enable_ocr and item.get("ocr"))
+        ):
             downloaded_not_imported.append(str(path))
             logger.info("已下载但不导入（PDF/图片等）: %s", path)
             continue
 
-        if not is_importable_file(path):
+        if not is_importable_file(path) and not (
+            enable_ocr and item.get("ocr") and path.suffix.lower() in NON_IMPORTABLE_EXTENSIONS
+        ):
             skipped.append(str(path))
             logger.info("跳过不支持的导入格式: %s", path)
             continue
@@ -940,7 +1073,12 @@ def import_downloaded_files(
         plugin = get_province_plugin(province)
         legacy = plugin.subject_mode == SubjectMode.LEGACY
         subject_type = infer_subject_type_from_title(subject_hint, legacy=legacy)
-        if plugin.province_slug == "fujian":
+        from provinces.metadata_bridge import infer_subject_type_for_slug
+
+        bridged_subject = infer_subject_type_for_slug(plugin.province_slug, subject_hint)
+        if bridged_subject:
+            subject_type = bridged_subject
+        elif plugin.province_slug == "fujian":
             from provinces.fujian.metadata import infer_fujian_subject_type
 
             subject_type = infer_fujian_subject_type(subject_hint) or subject_type
@@ -1013,10 +1151,35 @@ def import_downloaded_files(
                     )
                     continue
             else:
-                school_meta = infer_school_metadata_from_title(
+                from provinces.metadata_bridge import (
+                    infer_school_metadata_for_slug,
+                    is_importable_category_for_slug,
+                )
+
+                bridged_meta = infer_school_metadata_for_slug(
+                    plugin.province_slug,
                     subject_hint,
                     source_title=item.get("source_title"),
                 )
+                if bridged_meta is not None:
+                    school_meta = bridged_meta
+                    if not is_importable_category_for_slug(
+                        plugin.province_slug,
+                        school_meta.get("admission_category"),
+                    ):
+                        skipped_unsupported_category.append(str(path))
+                        logger.info(
+                            "%s 当前仅导入普通类，跳过 %s (%s)",
+                            plugin.province_name,
+                            path.name,
+                            school_meta.get("admission_category"),
+                        )
+                        continue
+                else:
+                    school_meta = infer_school_metadata_from_title(
+                        subject_hint,
+                        source_title=item.get("source_title"),
+                    )
 
         def _record_error(msg: str) -> None:
             try:
@@ -1040,6 +1203,61 @@ def import_downloaded_files(
                     "debug_preview": str(debug_path.relative_to(BASE_DIR)) if debug_path else None,
                 }
             )
+
+        if enable_ocr and item.get("ocr") and path.suffix.lower() in NON_IMPORTABLE_EXTENSIONS:
+            resolved = path.resolve()
+            if ocr_allowed_paths is not None and resolved not in ocr_allowed_paths:
+                logger.info("OCR 限量跳过 [%s] (ocr-limit=%s)", path.name, ocr_limit)
+                downloaded_not_imported.append(str(path))
+                continue
+            if resolved in ocr_processed_paths:
+                continue
+
+            from importers.file_import import import_image_with_ocr_to_db
+            from validators.image_verify import is_corrupted_image, verify_image_file
+
+            if is_corrupted_image(path):
+                verify = verify_image_file(path)
+                logger.warning("OCR 入库跳过损坏图片 [%s]: %s", path.name, verify.get("error"))
+                skipped_corrupted_image.append(str(path))
+                ocr_processed_paths.add(resolved)
+                continue
+
+            page_title = item.get("source_title") or item.get("attachment_title")
+            ocr_processed_paths.add(resolved)
+            try:
+                stats = import_image_with_ocr_to_db(
+                    session,
+                    path,
+                    record_type=data_type,
+                    default_year=year,
+                    default_province=province,
+                    subject_type=subject_type,
+                    batch=school_meta.get("batch") if school_meta else None,
+                    page_title=page_title,
+                    subject_mode=plugin.subject_mode,
+                    ocr_engine=ocr_engine,
+                )
+            except UnsupportedImportFormatError as exc:
+                ocr_failed.append(str(path))
+                failed.append(str(path))
+                _record_error(str(exc))
+                continue
+            except Exception as exc:
+                ocr_failed.append(str(path))
+                failed.append(str(path))
+                _record_error(str(exc))
+                continue
+            if stats.inserted > 0:
+                imported.append(str(path))
+            elif stats.failed > 0:
+                ocr_failed.append(str(path))
+                failed.append(str(path))
+                _record_error("; ".join(stats.errors[:5]) if stats.errors else "OCR 校验失败")
+            else:
+                ocr_skipped.append(str(path))
+                downloaded_not_imported.append(str(path))
+            continue
 
         try:
             stats = import_file_to_db(
@@ -1077,6 +1295,10 @@ def import_downloaded_files(
         else:
             skipped.append(str(path))
 
+    ocr_skipped_by_limit = 0
+    if ocr_allowed_paths is not None:
+        ocr_skipped_by_limit = len(all_ocr_paths - ocr_allowed_paths)
+
     return {
         "imported": imported,
         "skipped": skipped,
@@ -1084,6 +1306,11 @@ def import_downloaded_files(
         "skipped_unsupported_category": skipped_unsupported_category,
         "failed": failed,
         "downloaded_not_imported": downloaded_not_imported,
+        "ocr_failed": ocr_failed,
+        "ocr_skipped": ocr_skipped,
+        "skipped_corrupted_image": skipped_corrupted_image,
+        "ocr_processed": len(ocr_processed_paths),
+        "ocr_skipped_by_limit": ocr_skipped_by_limit,
         "errors_detail": errors_detail,
     }
 
@@ -1126,6 +1353,8 @@ def run_discover_and_download(
     keyword: str | None = None,
     max_pages: int = 5,
     force: bool = False,
+    *,
+    enable_ocr: bool = False,
 ) -> tuple[dict[int, Path], Path | None]:
     """
     多年份发现 → 下载 → 保存每年报告 + 总报告。
@@ -1156,6 +1385,7 @@ def run_discover_and_download(
                 force=force,
                 crawler=crawler,
                 province_slug=province_slug,
+                enable_ocr=enable_ocr,
             )
             reports_by_year[year] = report
             report_paths[year] = save_discovery_report(
@@ -1208,15 +1438,29 @@ def run_discover_download_import(
     max_pages: int = 5,
     force: bool = False,
     dry_run: bool = False,
+    *,
+    enable_ocr: bool = False,
+    ocr_require_audit_pass: bool = False,
+    ocr_limit: int | None = None,
+    ocr_engine: str = "paddle",
 ) -> dict[str, Any]:
     """多年份发现 → 下载 → 入库；单年失败不影响其他年份。"""
     from db.database import SessionLocal
+    from validators.ocr_quality_gate import assert_bulk_ocr_import_allowed
 
     if dry_run:
         return run_discover_only(years, province, data_type, keyword, max_pages)
 
+    assert_bulk_ocr_import_allowed(
+        province,
+        years,
+        data_type,
+        enable_ocr=enable_ocr,
+        ocr_require_audit_pass=ocr_require_audit_pass,
+    )
+
     report_paths, combined_path = run_discover_and_download(
-        years, province, data_type, keyword, max_pages, force
+        years, province, data_type, keyword, max_pages, force, enable_ocr=enable_ocr
     )
     from province_registry import get_province_plugin
 
@@ -1246,7 +1490,14 @@ def run_discover_download_import(
             session = SessionLocal()
             try:
                 import_summary = import_downloaded_files(
-                    report, year, province_norm, data_type, session
+                    report,
+                    year,
+                    province_norm,
+                    data_type,
+                    session,
+                    enable_ocr=enable_ocr,
+                    ocr_limit=ocr_limit,
+                    ocr_engine=ocr_engine,
                 )
             finally:
                 session.close()

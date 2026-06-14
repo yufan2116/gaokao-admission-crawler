@@ -135,7 +135,11 @@ def write_import_debug_preview(
         with open(out_path, "w", encoding="utf-8-sig", newline="") as f:
             writer = csv.writer(f)
             writer.writerow(["section", "key", "value"])
-            writer.writerow(["meta", "file_path", str(path.relative_to(BASE_DIR))])
+            try:
+                rel_path = str(path.resolve().relative_to(BASE_DIR.resolve()))
+            except ValueError:
+                rel_path = str(path.resolve())
+            writer.writerow(["meta", "file_path", rel_path])
             writer.writerow(["meta", "record_type", record_type])
             writer.writerow(["meta", "sheet", sheet_label])
             writer.writerow(["meta", "header_row", header_row])

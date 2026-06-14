@@ -7,9 +7,13 @@ CLI / Dashboard / discovery 通过本模块解析省份，避免散落 if provin
 from __future__ import annotations
 
 from provinces.base import ProvincePlugin
+from provinces.chongqing import ChongqingPlugin
 from provinces.fujian import FujianPlugin
 from provinces.guangdong import GuangdongPlugin
 from provinces.hebei import HebeiPlugin
+from provinces.hubei import HubeiPlugin
+from provinces.hunan import HunanPlugin
+from provinces.liaoning import LiaoningPlugin
 from provinces.henan import HenanPlugin
 from provinces.jiangsu import JiangsuPlugin
 from provinces.shandong import ShandongPlugin
@@ -25,6 +29,10 @@ PROVINCES: dict[str, ProvincePlugin] = {
     "广东": GuangdongPlugin(),
     "福建": FujianPlugin(),
     "河北": HebeiPlugin(),
+    "湖北": HubeiPlugin(),
+    "湖南": HunanPlugin(),
+    "辽宁": LiaoningPlugin(),
+    "重庆": ChongqingPlugin(),
 }
 
 

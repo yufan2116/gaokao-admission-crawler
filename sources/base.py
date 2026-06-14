@@ -40,6 +40,7 @@ class AccessStatus(str, Enum):
     CONNECTION_RESET = "connection_reset"
     UNSUPPORTED_ARCHIVE = "unsupported_archive"
     UNSUPPORTED_PDF = "unsupported_pdf"
+    UNKNOWN = "unknown"
 
 
 ACCESS_STATUS_LABELS: dict[str, str] = {
@@ -50,6 +51,7 @@ ACCESS_STATUS_LABELS: dict[str, str] = {
     AccessStatus.CONNECTION_RESET.value: "连接被重置",
     AccessStatus.UNSUPPORTED_ARCHIVE.value: "不支持归档包",
     AccessStatus.UNSUPPORTED_PDF.value: "不支持 PDF",
+    AccessStatus.UNKNOWN.value: "未知",
 }
 
 LEGACY_ACCESS_STATUS_MAP: dict[str, AccessStatus] = {

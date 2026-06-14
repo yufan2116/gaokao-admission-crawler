@@ -44,6 +44,11 @@ class DataQualityReport:
     min_score_null_rate: float = 0.0
     min_rank_null_rate: float = 0.0
     recommended_query_mode: str = "mixed"
+    source_quality: str | None = None
+    requires_manual_review: bool = False
+    ocr_record_count: int = 0
+    invalid_school_name_count: int = 0
+    invalid_school_name_rate: float = 0.0
     expected_rank_subjects: list[str] = field(
         default_factory=lambda: ["历史类", "物理类"]
     )
@@ -110,6 +115,13 @@ class DataQualityReport:
         lines.append(f"  min_score_null_rate: {self.min_score_null_rate:.2%}")
         lines.append(f"  min_rank_null_rate: {self.min_rank_null_rate:.2%}")
         lines.append(f"  recommended_query_mode: {self.recommended_query_mode}")
+        if self.source_quality:
+            lines.append(f"  source_quality: {self.source_quality}")
+            lines.append(f"  requires_manual_review: {str(self.requires_manual_review).lower()}")
+            lines.append(f"  ocr_record_count: {self.ocr_record_count}")
+            lines.append(f"  invalid_school_name_count: {self.invalid_school_name_count}")
+            lines.append(f"  invalid_school_name_rate: {self.invalid_school_name_rate:.2%}")
+            lines.append("  警告: OCR 实验数据不保证 100% 准确，请人工复核 ocr_preview")
         lines.append("")
 
         lines.append("## 空值检查")
@@ -293,5 +305,35 @@ def run_data_quality_check(
         report.recommended_query_mode = recommend_query_mode(ms_rate, mr_rate)
     else:
         report.recommended_query_mode = get_default_query_mode(province)
+
+    from parsers.parse_image_table import OCR_SOURCE_PREFIX
+
+    ocr_count = (
+        session.query(SchoolAdmissionLine)
+        .filter(
+            SchoolAdmissionLine.year == year,
+            SchoolAdmissionLine.province == province,
+            SchoolAdmissionLine.source_url.like(f"{OCR_SOURCE_PREFIX}%"),
+        )
+        .count()
+    )
+    report.ocr_record_count = ocr_count
+    if ocr_count > 0:
+        report.source_quality = "ocr_experimental"
+        report.requires_manual_review = True
+        from normalizers.school_name import is_invalid_school_name
+
+        ocr_rows = (
+            session.query(SchoolAdmissionLine)
+            .filter(
+                SchoolAdmissionLine.year == year,
+                SchoolAdmissionLine.province == province,
+                SchoolAdmissionLine.source_url.like(f"{OCR_SOURCE_PREFIX}%"),
+            )
+            .all()
+        )
+        invalid_count = sum(1 for row in ocr_rows if is_invalid_school_name(row.school_name))
+        report.invalid_school_name_count = invalid_count
+        report.invalid_school_name_rate = invalid_count / ocr_count
 
     return report

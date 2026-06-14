@@ -148,12 +148,64 @@ PROVINCE_DATA_AVAILABILITY: list[ProvinceDataAvailabilityRow] = [
         "notes": "普通类本科/专科专业粒度投档；艺体/对口 skipped_unsupported_category",
         "access_status": AccessStatus.CONNECTION_RESET.value,
     },
+    {
+        "province": "湖北",
+        "year": 2024,
+        "school_discovery_status": "discovered",
+        "school_download_status": "downloaded_not_imported",
+        "school_import_status": "unsupported_pdf_or_image",
+        "source_format": "PNG images (hbccks.cn)",
+        "machine_readable": False,
+        "query_mode": "unsupported_pdf_or_image",
+        "notes": "2024 普通类本科/专科投档线已发现（hbccks 官方页面）；表格为 PNG 图片，无 OCR 不入库",
+        "access_status": AccessStatus.AVAILABLE.value,
+    },
+    {
+        "province": "湖南",
+        "year": 2024,
+        "school_discovery_status": "plugin_ready",
+        "school_download_status": "pending",
+        "school_import_status": "pending",
+        "source_format": "unknown",
+        "machine_readable": False,
+        "machine_readable_level": "unknown",
+        "query_mode": "unknown",
+        "notes": "Phase 18 插件骨架；待补 seed 或列表页 URL 后验证",
+        "access_status": AccessStatus.UNKNOWN.value,
+    },
+    {
+        "province": "辽宁",
+        "year": 2024,
+        "school_discovery_status": "plugin_ready",
+        "school_download_status": "pending",
+        "school_import_status": "pending",
+        "source_format": "unknown",
+        "machine_readable": False,
+        "machine_readable_level": "unknown",
+        "query_mode": "unknown",
+        "notes": "Phase 18 插件骨架；待补 seed 或列表页 URL 后验证",
+        "access_status": AccessStatus.UNKNOWN.value,
+    },
+    {
+        "province": "重庆",
+        "year": 2024,
+        "school_discovery_status": "plugin_ready",
+        "school_download_status": "pending",
+        "school_import_status": "pending",
+        "source_format": "unknown",
+        "machine_readable": False,
+        "machine_readable_level": "unknown",
+        "query_mode": "unknown",
+        "notes": "Phase 18 插件骨架；待补 seed 或列表页 URL 后验证",
+        "access_status": AccessStatus.UNKNOWN.value,
+    },
 ]
 
 MACHINE_READABLE_LABELS: dict[str, str] = {
     "full": "是",
     "partial": "部分",
     "none": "否",
+    "unknown": "未知",
 }
 
 IMPORT_STATUS_LABELS: dict[str, str] = {
@@ -164,6 +216,8 @@ IMPORT_STATUS_LABELS: dict[str, str] = {
     "parsed_or_unsupported": "已解析 / 不支持",
     "imported_partial": "部分已入库",
     "not_started": "未开始",
+    "plugin_ready": "插件就绪",
+    "pending": "待验证",
 }
 
 QUERY_MODE_LABELS: dict[str, str] = {
@@ -172,6 +226,7 @@ QUERY_MODE_LABELS: dict[str, str] = {
     "mixed": "混合",
     "unsupported": "不支持",
     "unsupported_pdf_or_image": "不支持（PDF/图片源）",
+    "unknown": "未知",
 }
 
 

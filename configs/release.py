@@ -6,7 +6,15 @@ STABLE_VERSION_LABEL = "MVP+ Stable"
 STABLE_VERSION_ID = "mvp-plus-stable"
 
 STRUCTURED_PROVINCES: tuple[str, ...] = ("江苏", "浙江", "山东", "广东")
-SOURCE_AWARE_PROVINCES: tuple[str, ...] = ("河南", "福建", "河北")
+SOURCE_AWARE_PROVINCES: tuple[str, ...] = (
+    "河南",
+    "福建",
+    "河北",
+    "湖北",
+    "湖南",
+    "辽宁",
+    "重庆",
+)
 
 STABLE_VERSION_NOTE = (
     "这是 MVP+ 稳定版本，覆盖多省插件与 Source Adapter；"

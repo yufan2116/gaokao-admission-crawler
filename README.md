@@ -135,6 +135,12 @@ pip install -r requirements.txt
 pip install pdfplumber
 ```
 
+可选图片表格 OCR（实验，见 Phase 20）：
+
+```bash
+pip install paddleocr paddlepaddle
+```
+
 ## 初始化数据库
 
 ```bash
@@ -946,7 +952,334 @@ print(adapter.get_status())  # waf_blocked
 python scripts/run_regression.py
 ```
 
-覆盖：`data-quality`（苏浙鲁粤 2024）、FastAPI TestClient、Dashboard smoke test。
+覆盖：`data-quality`（苏浙鲁粤 2024）、FastAPI TestClient、Dashboard smoke test、`national-scan --dry-run`。
+
+### Phase 17：National Expansion Controller
+
+全国批量扫描，按 Source Adapter `access_status` 决定是否 discover / download / import；blocked 省份不强行请求。
+
+```bash
+python main.py national-scan --year 2024 --type school --dry-run
+python main.py national-scan --year 2024 --type school
+python main.py national-scan --year 2024 --type school --provinces 江苏 浙江 --import-enabled false
+```
+
+报告：`data/cleaned/national_scan_{year}_{type}.json`
+
+### Phase 18：Batch Easy-win Province Plugins
+
+批量新增湖北、湖南、辽宁、重庆 2024 school 新高考插件骨架（`SubjectMode.NEW_GAOKAO`，历史类/物理类）。
+
+- 状态：`plugin_ready` / `pending` / `unknown`，待补真实 seed URL 或列表页验证
+- 目录：`provinces/hubei/`、`provinces/hunan/`、`provinces/liaoning/`、`provinces/chongqing/`
+- `national-scan --dry-run` 自动覆盖 11 省
+
+### Phase 19：湖北 2024 school 真实数据源验证
+
+湖北 2024 普通类投档线发布于 [湖北教育考试网](http://www.hbccks.cn/)（湖北省教育考试院官网页脚链接的官方站点），非 hbea.edu.cn 正文栏目。
+
+**已验证 seed（2024 普通类）**：
+
+```bash
+python main.py discover-sources --province 湖北 --years 2024 --type school --max-pages 50
+python main.py discover-download-import --province 湖北 --years 2024 --type school --max-pages 50
+python main.py data-quality --province 湖北 --year 2024
+```
+
+**现状（2026-06 验证）**：
+
+| 批次 | 首选历史 | 首选物理 |
+|------|----------|----------|
+| 本科普通批 | apccglq/2024-07/142208 | apccglq/2024-07/142207 |
+| 高职高专普通批 | gzgzbl/2024-08/142216 | gzgzbl/2024-08/142215 |
+
+公告页内表格为 **PNG 图片**（无 Excel/PDF 附件）。默认可发现但不入库；可选 `--enable-ocr` 实验解析（见 Phase 20）。
+
+### Phase 20：Image Table OCR Parser（实验）
+
+**默认关闭**。图片表格 OCR 为实验功能，不替代 Excel/PDF parser；结果仍走 validate + data-quality，**不保证 100% 准确**。
+
+可选依赖（不写入 `requirements.txt` 强制项）：
+
+```bash
+pip install paddleocr paddlepaddle
+```
+
+Windows 若安装困难，可跳过 OCR，仅使用 Excel/PDF 流水线。
+
+Windows CPU 上 PaddlePaddle 3.3+ 可能因 oneDNN/PIR 冲突崩溃；解析器已自动设置 `enable_mkldnn=False` 与环境变量规避。若仍失败，可尝试版本组合 `paddlepaddle==3.2.0` + `paddleocr==3.3.3`。
+
+单张图片导入：
+
+```bash
+python main.py import-file data/raw/hubei/2024/school/attachments/xxx.png \
+  --type school --year 2024 --province 湖北 \
+  --subject-type 物理类 --batch 本科批 --enable-ocr
+```
+
+不加 `--enable-ocr` 时提示：`image import requires --enable-ocr`
+
+### Phase 20.1：OCR Quality Gate（安全流程）
+
+**不要批量导入全部图片**。批量 OCR 入库前须抽样审计并通过质量门禁。
+
+单张测试（不入库）：
+
+```bash
+python main.py ocr-audit-image data/raw/hubei/2024/school/attachments/1.png \
+  --type school --year 2024 --province 湖北 \
+  --subject-type 物理类 --batch 本科批
+```
+
+抽样审计（不入库，`--limit 5` 建议）：
+
+```bash
+python main.py ocr-batch-audit data/raw/hubei/2024/school/attachments \
+  --province 湖北 --year 2024 --type school \
+  --subject-type 物理类 --batch 本科批 --limit 5
+```
+
+输出 `data/cleaned/ocr_batch_audit_hubei_2024_school.json`；若 **≥80%** 图片 `suspicious_flags` 为空，写入 `data/cleaned/ocr_audit_pass_hubei_2024_school.flag`。
+
+`suspicious_flags` 触发条件：`valid_rows==0`、分数不在 100–750、空校名/专业组比例 >20%、`parsed_rows<5`、OCR 列数异常等。
+
+通过后批量导入（须同时带两个参数）：
+
+```bash
+python main.py discover-download-import --province 湖北 --years 2024 --type school \
+  --max-pages 50 --enable-ocr --ocr-require-audit-pass
+```
+
+仅 `--enable-ocr` 而不带 `--ocr-require-audit-pass` 时，**discover-download-import 会拒绝批量 OCR 入库**（单张 `import-file --enable-ocr` 仍可用）。
+
+### Phase 20.2：OCR Small-batch Import
+
+审计通过后，建议**小批量**验证入库稳定性，不要一次全量 OCR。
+
+```bash
+python main.py discover-download-import --province 湖北 --years 2024 --type school \
+  --max-pages 50 --keyword 物理 \
+  --enable-ocr --ocr-require-audit-pass --ocr-limit 5
+```
+
+- `--ocr-limit N`：按 `(source_title, attachment_title)` 排序后，只 OCR 入库前 **N 张唯一图片**（未传则不限，但不建议首次全量）
+- Summary 额外显示 `ocr_processed` / `ocr_skipped_by_limit`
+- 入库后 `data-quality --year 2024 --province 湖北` 应出现 `source_quality=ocr_experimental`
+
+审计输出：
+
+- `data/cleaned/ocr_raw/{filename}.json` — PaddleOCR 原始框
+- `data/cleaned/ocr_preview/{filename}.csv` — 重建表格预览（人工复核）
+
+`data-quality` 对 OCR 入库数据会标注 `source_quality=ocr_experimental`、`requires_manual_review=true`（OCR 数据可信度低于 Excel/PDF）。
+
+### Phase 20.6：OCR Dirty Data Cleanup
+
+Phase 20.5 修复前已入库的 OCR 脏数据（如 `school_name="2"/"3"/"4"`）需单独清理，避免污染 `data-quality`。仅删除 `source_url` 以 `ocr_experimental:` 开头且校名明显无效的记录；**不删 Excel/PDF、非 OCR 或正常 OCR 数据**。
+
+```bash
+# 默认 dry-run，只统计不删除
+python main.py clean-ocr-dirty-data --province 湖北 --year 2024
+
+# 确认后真正删除，并写报告 data/cleaned/ocr_dirty_cleanup_hubei_2024.json
+python main.py clean-ocr-dirty-data --province 湖北 --year 2024 --confirm-delete
+
+# 清理后验证
+python main.py data-quality --province 湖北 --year 2024
+```
+
+参数：`--province`、`--year`、`--source-prefix`（默认 `ocr_experimental:`）、`--confirm-delete`。
+
+脏数据判定（`school_admission_line`，须同时满足 province/year/source_prefix，且满足任一校名异常规则）：纯数字、`len<=1`、`is_invalid_school_name`、`school_code LIKE A0010%` 且校名纯数字等。
+
+`data-quality` 在 `source_quality=ocr_experimental` 时额外输出 `invalid_school_name_count`、`invalid_school_name_rate`。
+
+### Phase 20.7：OCR Performance Profile
+
+只统计各阶段耗时，**不修改解析/入库逻辑**。database 阶段默认 rollback（仅测耗时）。
+
+```bash
+python main.py ocr-profile \
+  data/raw/hubei/2024/school/attachments/1.png \
+  data/raw/hubei/2024/school/attachments/2.png \
+  data/raw/hubei/2024/school/attachments/3.png \
+  --province 湖北 --year 2024
+```
+
+输出 `data/cleaned/ocr_profile.json`，字段：`image_seconds`、`ocr_seconds`、`clustering_seconds`、`dataframe_seconds`、`normalize_seconds`、`validate_seconds`、`database_seconds`、`total_seconds`。
+
+### Phase 20.8：OCR Engine Optimization
+
+消除重复计算：**引擎单例** + **磁盘 OCR 缓存**（不改解析/normalize/validate/数据库逻辑）。
+
+- `parsers/ocr_engine.py`：`get_ocr_engine()` 全局复用 PaddleOCR（`ocr_engine_recreated=false` 表示复用）
+- `data/cache/ocr/{sha256}.json`：原始图片 sha256 → OCR JSON；`--use-ocr-cache` 默认开启
+- `ocr-profile` 额外输出：`cache_hit`、`cache_miss`、`parser_used`、`ocr_engine_recreated`
+
+```bash
+# 第一次：cache_miss（写入缓存）
+python main.py ocr-profile 1.png 2.png 3.png --province 湖北 --year 2024 --run-label first_run
+
+# 第二次：cache_hit（OCR 阶段应 <1s/张）
+python main.py ocr-profile 1.png 2.png 3.png --province 湖北 --year 2024 --run-label second_run
+```
+
+### Phase 20.9：OCR Precompute
+
+将 **OCR 推理** 与 **入库** 拆开：先批量预计算 OCR 缓存，再审计、再小批量入库。
+
+```bash
+# 1. 预计算 OCR（默认 --limit 20，已有 cache 跳过推理，可中断后重跑）
+python main.py ocr-precompute data/raw/hubei/2024/school/attachments \
+  --province 湖北 --year 2024 --type school --limit 20
+
+# 2. 审计（不入库）
+python main.py ocr-batch-audit data/raw/hubei/2024/school/attachments \
+  --province 湖北 --year 2024 --type school --limit 20
+
+# 3. 小批量入库（须 audit pass + ocr-limit）
+python main.py discover-download-import --province 湖北 --years 2024 --type school \
+  --max-pages 50 --keyword 物理 \
+  --enable-ocr --ocr-require-audit-pass --ocr-limit 20
+```
+
+- 输出报告：`data/cleaned/ocr_precompute_hubei_2024_school.json`
+- 图片按**自然序**排序（1→2→3→…→10），`--limit 20` 取前 20 张
+- cache_miss 时会打印进度（CPU OCR 较慢属正常，非卡死）
+- 不 normalize / 不 validate / 不入库；不跳过 audit；不默认全量
+
+### Phase 20.10：OCR Runtime Diagnostics
+
+查清 PaddleOCR 慢速原因（**不改主流程**）：
+
+```bash
+python main.py ocr-diagnose
+# 可选：--image path/to/1.png  --benchmark-sample（对样本图全量 OCR，较慢）
+```
+
+输出 `data/cleaned/ocr_diagnose.json`：Python/Paddle 版本、CUDA、CPU/内存、当前 PaddleOCR 参数、mkldnn、样本图尺寸、小图 benchmark、轻量参数对照与 `likely_slow_reasons`。
+
+### Phase 20.11：OCR Engine 选择（Paddle / RapidOCR）
+
+保留现有 OCR pipeline、audit gate、cache、import 逻辑；默认仍为 **Paddle**，可选更快的 **RapidOCR** 做实验。
+
+**安装（可选）：**
+
+```bash
+pip install rapidocr-onnxruntime
+```
+
+**CLI 参数（默认 `paddle`）：**
+
+```bash
+--ocr-engine paddle|rapidocr
+```
+
+适用于：`ocr-profile`、`ocr-precompute`、`ocr-audit-image`、`ocr-batch-audit`、`import-file --enable-ocr`、`discover-download-import --enable-ocr`、`ocr-diagnose`。
+
+**缓存按 engine 区分：**
+
+- 路径：`data/cache/ocr/{engine}/{sha256}.json`
+- 含 `engine`、`engine_version`；Paddle 仍可读旧 flat 路径 `data/cache/ocr/{sha256}.json`
+- Paddle 与 RapidOCR **不共用**缓存
+
+**快速实验（禁用 cache，测真实推理速度）：**
+
+```bash
+python main.py ocr-profile data/raw/hubei/2024/school/attachments/1.png \
+  --province 湖北 --year 2024 --ocr-engine rapidocr --no-use-ocr-cache
+```
+
+**诊断 RapidOCR：**
+
+```bash
+python main.py ocr-diagnose
+# 报告含 rapidocr installed、onnxruntime installed、rapidocr tiny benchmark
+```
+
+未安装 `rapidocr-onnxruntime` 时返回 `rapidocr_not_installed`，不崩溃。
+
+### Phase 20.12：OCR Engine Quality Comparison
+
+比较 PaddleOCR 与 RapidOCR 的**速度**与**结构化质量**，决定是否可用于湖北 PNG 入库。**不入库、不改库、不跳过 audit 逻辑。**
+
+```bash
+# 单张对比（有 cache 优先用 cache；Paddle 无 cache 默认跳过 live 推理）
+python main.py ocr-compare-engines data/raw/hubei/2024/school/attachments/1.png \
+  --province 湖北 --year 2024 --type school \
+  --subject-type 物理类 --batch 本科批
+
+# 批量对比（默认前 5 张）
+python main.py ocr-compare-batch data/raw/hubei/2024/school/attachments \
+  --province 湖北 --year 2024 --type school \
+  --subject-type 物理类 --batch 本科批 --limit 5
+```
+
+**输出：**
+
+- 单张：`data/cleaned/ocr_compare_{filename}.json`
+- 批量：`data/cleaned/ocr_engine_comparison_hubei_2024_school.json`
+
+**`rapidocr_acceptable` 条件（相对 Paddle baseline）：**
+
+- `valid_rows >= 80%` Paddle valid_rows
+- `suspicious_flags` 为空
+- `min_score` 范围合理（100–750）
+- `school_name_invalid_rate < 5%`
+
+**注意：** RapidOCR 通常比 Paddle 快很多，但若 `row_count_ratio` 过低（如 1.png 已知 Paddle 45 行 vs RapidOCR 13 行），**不能**用于入库；默认仍使用 Paddle。Paddle 无磁盘缓存时加 `--skip-slow-paddle`（默认开启），仅使用已有 Paddle cache 作 baseline。
+
+### Phase 20.13：Hybrid OCR Strategy
+
+**rapidocr-first + quality gate + paddle fallback**：利用 RapidOCR 速度，低质量时回退 Paddle cache。**不是生产默认**，仍须 audit pass 才能入库。
+
+```bash
+# 批量 hybrid 审计（不入库，默认 limit 5）
+python main.py ocr-batch-audit data/raw/hubei/2024/school/attachments \
+  --province 湖北 --year 2024 --type school \
+  --subject-type 物理类 --batch 本科批 \
+  --limit 5 --ocr-engine hybrid
+```
+
+**`--ocr-engine` 选项：**
+
+| 模式 | 说明 |
+|------|------|
+| `paddle` | 慢但较准（默认） |
+| `rapidocr` | 快但可能漏行 |
+| `hybrid` | 推荐实验：先 RapidOCR，质量门槛不通过则回退 Paddle cache |
+
+**Hybrid RapidOCR 质量门槛（school）：**
+
+- `valid_rows >= 40`，或有 Paddle baseline cache 时 `>= 80%` Paddle valid_rows
+- `suspicious_flags` 为空
+- 关键字段非空率 `>= 95%`（school_name / major_group / min_score）
+- `school_name_invalid_rate < 5%`
+- `min_score` 范围 100–750
+
+**Fallback 规则：**
+
+- 复用 `data/cache/ocr/rapidocr/` 与 `data/cache/ocr/paddle/`（无单独 hybrid cache）
+- Paddle fallback **优先读 cache**；无 cache 时默认返回 `fallback_required_but_no_cache`（不跑 700s live Paddle）
+- 加 `--allow-slow-paddle-fallback` 才允许 live Paddle
+
+**metadata：** `engine_selected`、`fallback_reason`、`rapidocr_seconds`、`paddle_cache_hit` 等写入 audit / profile 报告。
+
+### Phase 20.15：Corrupted Image Handling
+
+损坏/截断图片不参与 audit 通过率分母，也不计为 OCR 失败。
+
+```bash
+# 按自然序校验图片（PIL verify + load）
+python main.py verify-images data/raw/hubei/2024/school/attachments \
+  --province 湖北 --year 2024 --type school --limit 40
+```
+
+输出 `data/cleaned/image_verify_{province}_{year}_{data_type}.json`；损坏图附带 `source_url` / `page_url`（来自 discovery 报告）便于重新下载。
+
+- `ocr-batch-audit`：`corrupted_image` 状态，**无** `suspicious_flags`；`clean_ratio` 分母排除损坏图
+- `ocr-precompute`：跳过损坏图，报告 `skipped_corrupted_image`
+- `discover-download-import`：`skipped_corrupted_image += 1`，不入库，不算 `ocr_failed`
 
 ## 后续计划
 

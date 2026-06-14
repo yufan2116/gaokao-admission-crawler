@@ -12,6 +12,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 CLEANED_DIR = DATA_DIR / "cleaned"
+OCR_CACHE_DIR = DATA_DIR / "cache" / "ocr"
 
 # SQLite 数据库路径
 DATABASE_URL = f"sqlite:///{BASE_DIR / 'gaokao.db'}"
@@ -44,12 +45,12 @@ EXCEL_COLUMN_ALIASES = {
     "major_code": ["专业代号", "major_code", "专业代码"],
     "subject_type": ["科类", "选科", "subject_type", "科目类别"],
     "batch": ["批次", "batch", "录取批次"],
-    "major_group": ["专业组", "专业组代码", "major_group", "院校专业组"],
-    "min_score": ["最低分", "投档分", "投档最低分", "分数线", "投档分数线", "min_score", "最低投档分"],
+    "major_group": ["专业组", "专业组代码", "major_group", "院校专业组", "院校专业组代号", "院校专业组名称"],
+    "min_score": ["最低分", "投档分", "投档最低分", "分数线", "投档分数线", "min_score", "最低投档分", "投档线"],
     "tie_breaker_text": ["投档最低分同分考生排序项", "同分排序", "辅助排序分", "同分考生排序项"],
     "avg_score": ["平均分", "avg_score"],
     "max_score": ["最高分", "max_score"],
-    "min_rank": ["最低位次", "位次", "名次号", "min_rank", "排名"],
+    "min_rank": ["最低位次", "位次", "名次号", "min_rank", "排名", "投档最低位次", "最低投档位次", "排位"],
     "plan_count": ["计划数", "招生人数", "招生计划", "投档计划数", "plan_count"],
     "score": ["分数", "score", "控制线", "成绩", "分值"],
     "same_score_count": ["同分人数", "same_score_count", "人数", "本段人数"],

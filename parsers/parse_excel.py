@@ -60,6 +60,7 @@ DATA_TYPE_ALIASES: dict[str, dict[str, list[str]]] = {
         "major_name": ["专业名称", "专业", "专业代号及名称"],
         "major_group": [
             "专业组代码",
+            "院校专业组代号",
             "院校专业组",
             "专业组",
             "院校、专业组",
@@ -72,6 +73,7 @@ DATA_TYPE_ALIASES: dict[str, dict[str, list[str]]] = {
             "投档分",
             "分数线",
             "投档分数线",
+            "投档线",
         ],
         "tie_breaker_text": [
             "投档最低分同分考生排序项",
@@ -84,10 +86,13 @@ DATA_TYPE_ALIASES: dict[str, dict[str, list[str]]] = {
             "最低位次",
             "投档最低排位",
             "投档最低位次",
+            "最低投档位次",
             "排名",
             "名次号",
+            "排位",
         ],
         "plan_count": ["计划数", "招生计划", "招生人数", "投档计划数", "计划人数"],
+        "subject_type": ["科类", "类别", "选科", "科目类别"],
     },
     "rank": {
         "score": ["分数", "成绩", "分值"],
@@ -339,6 +344,11 @@ def parse_excel(
         df["province"] = default_province
 
     # 科类推断
+    header_context = " ".join(
+        str(v)
+        for v in df_raw.iloc[: header_row + 1].values.flatten()
+        if pd.notna(v) and str(v).strip()
+    )
     use_sheet_priority = prefer_sheet or data_type == "rank"
     resolved_subject = resolve_subject_type(
         subject_type_hint,
@@ -347,6 +357,7 @@ def parse_excel(
         df,
         prefer_sheet=use_sheet_priority,
         subject_mode=subject_mode,
+        header_rows_text=header_context,
     )
     if resolved_subject:
         df["subject_type"] = resolved_subject

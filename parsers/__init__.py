@@ -10,6 +10,7 @@ from parsers.parse_excel import (
 )
 from parsers.parse_html import extract_download_links, extract_links
 from parsers.parse_pdf import parse_pdf_file
+from parsers.parse_image_table import ImageTableParseResult, parse_image_table
 from parsers.parse_pdf_tables import PdfTableParseResult, parse_pdf_tables
 
 __all__ = [
@@ -25,4 +26,6 @@ __all__ = [
     "parse_pdf_file",
     "parse_pdf_tables",
     "PdfTableParseResult",
+    "parse_image_table",
+    "ImageTableParseResult",
 ]

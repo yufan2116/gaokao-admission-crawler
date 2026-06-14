@@ -146,24 +146,292 @@ def cmd_normalize_excel(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_import_file(args: argparse.Namespace) -> int:
-    """按扩展名解析文件（Excel/HTML）并写入 SQLite。"""
+def cmd_ocr_audit_image(args: argparse.Namespace) -> int:
+    """OCR + normalize + validate 单张审计，不入库。"""
+    from validators.ocr_quality_gate import audit_ocr_image, format_single_audit_lines
+
     path = Path(args.file)
     if not path.exists():
         logger.error("文件不存在: %s", path)
         return 1
 
     province = normalize_province(args.province or DEFAULT_PROVINCE)
+    try:
+        result = audit_ocr_image(
+            path,
+            data_type=args.type,
+            province=province,
+            year=args.year,
+            subject_type=getattr(args, "subject_type", None),
+            batch=getattr(args, "batch", None),
+            page_title=getattr(args, "page_title", None),
+            ocr_engine=_ocr_engine_from_args(args),
+            use_ocr_cache=getattr(args, "use_ocr_cache", True),
+            allow_slow_paddle_fallback=getattr(args, "allow_slow_paddle_fallback", False),
+        )
+    except Exception as exc:
+        logger.error("OCR 审计失败: %s", exc)
+        return 1
+
+    for line in format_single_audit_lines(result):
+        print(line)
+    if result.get("suspicious_flags"):
+        logger.warning("suspicious_flags: %s", result["suspicious_flags"])
+    return 0 if not result.get("suspicious_flags") else 2
+
+
+def cmd_ocr_batch_audit(args: argparse.Namespace) -> int:
+    """批量抽样 OCR 审计，不入库。"""
+    from validators.ocr_quality_gate import run_ocr_batch_audit
+
+    directory = Path(args.directory)
+    province = normalize_province(args.province or DEFAULT_PROVINCE)
+    try:
+        report = run_ocr_batch_audit(
+            directory,
+            province=province,
+            year=args.year,
+            data_type=args.type,
+            subject_type=getattr(args, "subject_type", None),
+            batch=getattr(args, "batch", None),
+            limit=getattr(args, "limit", None),
+            ocr_engine=_ocr_engine_from_args(args),
+            use_ocr_cache=getattr(args, "use_ocr_cache", True),
+            allow_slow_paddle_fallback=getattr(args, "allow_slow_paddle_fallback", False),
+        )
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+    except Exception as exc:
+        logger.error("批量 OCR 审计失败: %s", exc)
+        return 1
+
+    print(f"report: {report['report_path']}")
+    print(f"images_audited: {report['images_audited']}")
+    if report.get("corrupted_count"):
+        print(f"corrupted_count: {report.get('corrupted_count')} (excluded from pass ratio)")
+        print(f"images_audited_eligible: {report.get('images_audited_eligible')}")
+    print(f"clean_ratio: {report['clean_ratio']:.1%}")
+    print(f"audit_passed: {report['audit_passed']}")
+    hybrid_summary = report.get("hybrid_summary")
+    if hybrid_summary:
+        print(f"hybrid rapidocr_selected: {hybrid_summary.get('rapidocr_selected')}")
+        print(f"hybrid paddle_selected: {hybrid_summary.get('paddle_selected')}")
+        print(
+            "hybrid fallback_required_but_no_cache: "
+            f"{hybrid_summary.get('fallback_required_but_no_cache')}"
+        )
+        print(f"hybrid hybrid_failed: {hybrid_summary.get('hybrid_failed')}")
+    if report.get("audit_passed"):
+        print(f"flag: {report['flag_path']}")
+    else:
+        logger.warning(
+            "审计未通过（需要 >= %.0f%% 图片无 suspicious_flags）",
+            report["pass_threshold"] * 100,
+        )
+    return 0 if report.get("audit_passed") else 2
+
+
+def cmd_ocr_precompute(args: argparse.Namespace) -> int:
+    """OCR 预计算：仅推理写缓存，不入库。"""
+    from validators.ocr_precompute import format_precompute_lines, run_ocr_precompute
+
+    province = normalize_province(args.province or DEFAULT_PROVINCE)
+    directory = Path(args.image_dir)
+    if not directory.is_dir():
+        logger.error("目录不存在: %s", directory)
+        return 1
+
+    limit = getattr(args, "limit", 20)
+    if limit == 0:
+        limit = None
+
+    try:
+        report = run_ocr_precompute(
+            directory,
+            province=province,
+            year=args.year,
+            data_type=args.type,
+            limit=limit,
+            use_cache=getattr(args, "use_ocr_cache", True),
+            ocr_engine=_ocr_engine_from_args(args),
+        )
+    except Exception as exc:
+        logger.error("OCR 预计算失败: %s", exc)
+        return 1
+
+    for line in format_precompute_lines(report):
+        print(line)
+    return 1 if report.get("failed") else 0
+
+
+def cmd_ocr_diagnose(args: argparse.Namespace) -> int:
+    """OCR 运行时诊断（环境/模型/小图 benchmark）。"""
+    from validators.ocr_diagnose import format_diagnose_lines, run_ocr_diagnose
+
+    sample = getattr(args, "image", None)
+    try:
+        report = run_ocr_diagnose(
+            sample_image=sample,
+            run_sample_benchmark=getattr(args, "benchmark_sample", False),
+            ocr_engine=_ocr_engine_from_args(args),
+        )
+    except Exception as exc:
+        logger.error("OCR 诊断失败: %s", exc)
+        return 1
+
+    for line in format_diagnose_lines(report):
+        print(line)
+    return 0
+
+
+def cmd_ocr_profile(args: argparse.Namespace) -> int:
+    """OCR 全流程耗时剖析（只统计，默认 database rollback）。"""
+    from validators.ocr_profile import format_profile_lines, run_ocr_profile_batch
+
+    province = normalize_province(args.province or DEFAULT_PROVINCE)
+    image_paths = [Path(p) for p in args.images]
+    for path in image_paths:
+        if not path.exists():
+            logger.error("文件不存在: %s", path)
+            return 1
+
     session = SessionLocal()
     try:
-        stats = import_file_to_db(
+        report = run_ocr_profile_batch(
             session,
-            path,
-            record_type=args.type,
-            default_year=args.year,
-            default_province=province,
+            image_paths,
+            province=province,
+            year=args.year,
             subject_type=getattr(args, "subject_type", None),
+            batch=getattr(args, "batch", None),
+            commit_database=getattr(args, "commit_database", False),
+            use_ocr_cache=getattr(args, "use_ocr_cache", True),
+            run_label=getattr(args, "run_label", None),
+            ocr_engine=_ocr_engine_from_args(args),
+            allow_slow_paddle_fallback=getattr(args, "allow_slow_paddle_fallback", False),
         )
+    except Exception as exc:
+        logger.error("OCR 耗时剖析失败: %s", exc)
+        return 1
+    finally:
+        session.close()
+
+    for line in format_profile_lines(report):
+        print(line)
+    return 0
+
+
+def cmd_ocr_compare_engines(args: argparse.Namespace) -> int:
+    """单张图 Paddle vs RapidOCR 质量对比（不入库）。"""
+    from validators.ocr_engine_compare import compare_engines_on_image, format_compare_lines
+
+    path = Path(args.image)
+    if not path.exists():
+        logger.error("文件不存在: %s", path)
+        return 1
+
+    province = normalize_province(args.province or DEFAULT_PROVINCE)
+    engines = getattr(args, "engines", None) or ["paddle", "rapidocr"]
+    try:
+        report = compare_engines_on_image(
+            path,
+            engines=engines,
+            data_type=args.type,
+            province=province,
+            year=args.year,
+            subject_type=getattr(args, "subject_type", None),
+            batch=getattr(args, "batch", None),
+            use_ocr_cache=getattr(args, "use_ocr_cache", True),
+            skip_slow_paddle=getattr(args, "skip_slow_paddle", True),
+        )
+    except Exception as exc:
+        logger.error("OCR 引擎对比失败: %s", exc)
+        return 1
+
+    for line in format_compare_lines(report):
+        print(line)
+    comp = report.get("comparison") or {}
+    return 0 if comp.get("rapidocr_acceptable") else 2
+
+
+def cmd_ocr_compare_batch(args: argparse.Namespace) -> int:
+    """批量 OCR 引擎质量对比（不入库）。"""
+    from validators.ocr_engine_compare import format_batch_compare_lines, run_ocr_compare_batch
+
+    province = normalize_province(args.province or DEFAULT_PROVINCE)
+    directory = Path(args.image_dir)
+    if not directory.is_dir():
+        logger.error("目录不存在: %s", directory)
+        return 1
+
+    limit = getattr(args, "limit", 5)
+    if limit == 0:
+        limit = None
+    engines = getattr(args, "engines", None) or ["paddle", "rapidocr"]
+    try:
+        report = run_ocr_compare_batch(
+            directory,
+            province=province,
+            year=args.year,
+            data_type=args.type,
+            subject_type=getattr(args, "subject_type", None),
+            batch=getattr(args, "batch", None),
+            limit=limit,
+            engines=engines,
+            use_ocr_cache=getattr(args, "use_ocr_cache", True),
+            skip_slow_paddle=getattr(args, "skip_slow_paddle", True),
+        )
+    except Exception as exc:
+        logger.error("OCR 批量对比失败: %s", exc)
+        return 1
+
+    for line in format_batch_compare_lines(report):
+        print(line)
+    summary = report.get("summary") or {}
+    acceptable = summary.get("rapidocr_acceptable_count") or 0
+    total = summary.get("image_count") or 0
+    return 0 if total > 0 and acceptable == total else 2
+
+
+def cmd_import_file(args: argparse.Namespace) -> int:
+    """按扩展名解析文件（Excel/HTML/图片 OCR）并写入 SQLite。"""
+    from importers.file_import import import_image_with_ocr_to_db
+    from parsers.parse_image_table import is_image_table_file
+
+    path = Path(args.file)
+    if not path.exists():
+        logger.error("文件不存在: %s", path)
+        return 1
+
+    if is_image_table_file(path) and not getattr(args, "enable_ocr", False):
+        logger.error("image import requires --enable-ocr")
+        return 1
+
+    province = normalize_province(args.province or DEFAULT_PROVINCE)
+    session = SessionLocal()
+    try:
+        if getattr(args, "enable_ocr", False) and is_image_table_file(path):
+            stats = import_image_with_ocr_to_db(
+                session,
+                path,
+                record_type=args.type,
+                default_year=args.year,
+                default_province=province,
+                subject_type=getattr(args, "subject_type", None),
+                batch=getattr(args, "batch", None),
+                page_title=getattr(args, "page_title", None),
+                ocr_engine=_ocr_engine_from_args(args),
+            )
+        else:
+            stats = import_file_to_db(
+                session,
+                path,
+                record_type=args.type,
+                default_year=args.year,
+                default_province=province,
+                subject_type=getattr(args, "subject_type", None),
+            )
     except UnsupportedImportFormatError as exc:
         logger.error("%s", exc)
         return 1
@@ -393,6 +661,28 @@ def _add_discovery_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--force", action="store_true", help="覆盖已存在附件")
 
 
+def _add_ocr_engine_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--ocr-engine",
+        choices=["paddle", "rapidocr", "hybrid"],
+        default="paddle",
+        help="OCR 引擎：paddle（默认）、rapidocr 或 hybrid（rapidocr-first + paddle fallback）",
+    )
+
+
+def _add_allow_slow_paddle_fallback_arg(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--allow-slow-paddle-fallback",
+        action="store_true",
+        default=False,
+        help="hybrid 回退 Paddle 时允许无 cache 的 live 推理（默认关闭，避免 700s+）",
+    )
+
+
+def _ocr_engine_from_args(args: argparse.Namespace) -> str:
+    return getattr(args, "ocr_engine", None) or "paddle"
+
+
 def _discovery_years_from_args(args: argparse.Namespace) -> list[int]:
     """从 CLI 参数解析年份列表。"""
     return resolve_discovery_years(year=args.year, years=args.years)
@@ -485,6 +775,36 @@ def cmd_discover_and_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify_images(args: argparse.Namespace) -> int:
+    """按自然序校验图片完整性（损坏/截断检测）。"""
+    from validators.image_verify import format_verify_lines, run_verify_images
+
+    directory = Path(args.image_dir)
+    if not directory.is_dir():
+        logger.error("目录不存在: %s", directory)
+        return 1
+
+    province = normalize_province(args.province) if getattr(args, "province", None) else None
+    limit = getattr(args, "limit", None)
+    if limit == 0:
+        limit = None
+    try:
+        report = run_verify_images(
+            directory,
+            province=province,
+            year=getattr(args, "year", None),
+            data_type=getattr(args, "type", "school"),
+            limit=limit,
+        )
+    except Exception as exc:
+        logger.error("图片校验失败: %s", exc)
+        return 1
+
+    for line in format_verify_lines(report):
+        print(line)
+    return 1 if (report.get("corrupted_count") or 0) > 0 else 0
+
+
 def cmd_discover_download_import(args: argparse.Namespace) -> int:
     """发现 → 下载 → 入库。"""
     try:
@@ -510,6 +830,10 @@ def cmd_discover_download_import(args: argparse.Namespace) -> int:
             keyword=args.keyword,
             max_pages=args.max_pages,
             force=args.force,
+            enable_ocr=getattr(args, "enable_ocr", False),
+            ocr_require_audit_pass=getattr(args, "ocr_require_audit_pass", False),
+            ocr_limit=getattr(args, "ocr_limit", None),
+            ocr_engine=_ocr_engine_from_args(args),
         )
     except (ValueError, NotImplementedError) as exc:
         logger.error("%s", exc)
@@ -541,8 +865,51 @@ def cmd_discover_download_import(args: argparse.Namespace) -> int:
         )
     if result.get("hint"):
         print(f"\nhint: {result['hint']}")
+    ocr_failed_total = sum(row.get("ocr_failed", 0) for row in result.get("summary", []))
+    ocr_skipped_total = sum(row.get("ocr_skipped", 0) for row in result.get("summary", []))
+    ocr_processed_total = sum(row.get("ocr_processed", 0) for row in result.get("summary", []))
+    ocr_limit_skip_total = sum(
+        row.get("ocr_skipped_by_limit", 0) for row in result.get("summary", [])
+    )
+    skipped_corrupted_total = sum(
+        row.get("skipped_corrupted_image", 0) for row in result.get("summary", [])
+    )
+    if getattr(args, "enable_ocr", False) or ocr_failed_total or ocr_skipped_total:
+        print(
+            f"ocr_processed={ocr_processed_total} "
+            f"ocr_skipped_by_limit={ocr_limit_skip_total} "
+            f"skipped_corrupted_image={skipped_corrupted_total} "
+            f"ocr_failed={ocr_failed_total} ocr_skipped={ocr_skipped_total}"
+        )
     print("======================================================")
     return 1 if has_failure else 0
+
+
+def _parse_bool_flag(value: str) -> bool:
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def cmd_national_scan(args: argparse.Namespace) -> int:
+    """全国批量扫描：按 access_status 决定 discover / download / import。"""
+    from services.national_scan import print_national_scan_summary, run_national_scan
+
+    provinces = args.provinces if args.provinces else None
+    try:
+        report = run_national_scan(
+            year=args.year,
+            data_type=args.type,
+            provinces=provinces,
+            dry_run=args.dry_run,
+            import_enabled=_parse_bool_flag(args.import_enabled),
+            max_pages=args.max_pages,
+        )
+    except ValueError as exc:
+        logger.error("%s", exc)
+        return 1
+
+    print_national_scan_summary(report)
+    failed = report.get("summary", {}).get("failed", 0)
+    return 1 if failed > 0 else 0
 
 
 def cmd_import_school_metadata(args: argparse.Namespace) -> int:
@@ -585,6 +952,35 @@ def cmd_data_quality(args: argparse.Namespace) -> int:
         session.close()
 
     for line in report.to_lines():
+        print(line)
+    return 0
+
+
+def cmd_clean_ocr_dirty_data(args: argparse.Namespace) -> int:
+    """清理 OCR 实验来源的脏 school 记录（默认 dry-run）。"""
+    from parsers.parse_image_table import OCR_SOURCE_PREFIX
+    from validators.ocr_dirty_cleanup import format_cleanup_lines, run_ocr_dirty_cleanup
+
+    province = normalize_province(args.province or DEFAULT_PROVINCE)
+    source_prefix = getattr(args, "source_prefix", None) or OCR_SOURCE_PREFIX
+    confirm_delete = getattr(args, "confirm_delete", False)
+
+    session = SessionLocal()
+    try:
+        report = run_ocr_dirty_cleanup(
+            session,
+            province=province,
+            year=args.year,
+            source_prefix=source_prefix,
+            confirm_delete=confirm_delete,
+        )
+    except Exception as exc:
+        logger.error("OCR 脏数据清理失败: %s", exc)
+        return 1
+    finally:
+        session.close()
+
+    for line in format_cleanup_lines(report):
         print(line)
     return 0
 
@@ -673,8 +1069,8 @@ def build_parser() -> argparse.ArgumentParser:
         help="科类（历史类/物理类）；优先级高于文件名与 Excel 内容推断",
     )
 
-    file_p = sub.add_parser("import-file", help="按扩展名导入 Excel/HTML 文件")
-    file_p.add_argument("file", help="文件路径（.xlsx/.xls/.html）")
+    file_p = sub.add_parser("import-file", help="按扩展名导入 Excel/HTML/图片(OCR) 文件")
+    file_p.add_argument("file", help="文件路径（.xlsx/.xls/.html/.png/.jpg）")
     file_p.add_argument(
         "--type",
         required=True,
@@ -684,6 +1080,242 @@ def build_parser() -> argparse.ArgumentParser:
     file_p.add_argument("--year", type=int, required=True, help="默认年份")
     file_p.add_argument("--province", default=DEFAULT_PROVINCE, help="默认省份")
     file_p.add_argument("--subject-type", default=None, help="科类（历史类/物理类）")
+    file_p.add_argument("--batch", default=None, help="批次（如 本科批/专科批）")
+    file_p.add_argument("--page-title", default=None, help="来源公告标题（OCR 推断辅助）")
+    file_p.add_argument(
+        "--enable-ocr",
+        action="store_true",
+        help="实验性：启用 OCR 解析图片表格（默认关闭）",
+    )
+    _add_ocr_engine_arg(file_p)
+
+    ocr_audit_p = sub.add_parser(
+        "ocr-audit-image",
+        help="单张图片 OCR 审计（parse→normalize→validate，不入库）",
+    )
+    ocr_audit_p.add_argument("file", help="图片路径（.png/.jpg/.jpeg）")
+    ocr_audit_p.add_argument(
+        "--type",
+        required=True,
+        choices=["control", "school", "major", "rank"],
+        help="数据类型",
+    )
+    ocr_audit_p.add_argument("--year", type=int, required=True)
+    ocr_audit_p.add_argument("--province", default=DEFAULT_PROVINCE)
+    ocr_audit_p.add_argument("--subject-type", default=None)
+    ocr_audit_p.add_argument("--batch", default=None)
+    ocr_audit_p.add_argument("--page-title", default=None)
+    _add_ocr_engine_arg(ocr_audit_p)
+    _add_allow_slow_paddle_fallback_arg(ocr_audit_p)
+    ocr_audit_p.add_argument(
+        "--use-ocr-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+
+    ocr_batch_p = sub.add_parser(
+        "ocr-batch-audit",
+        help="批量抽样 OCR 审计（不入库，达标写入 pass flag）",
+    )
+    ocr_batch_p.add_argument(
+        "directory",
+        help="图片目录，如 data/raw/hubei/2024/school/attachments",
+    )
+    ocr_batch_p.add_argument("--province", default=DEFAULT_PROVINCE)
+    ocr_batch_p.add_argument("--year", type=int, required=True)
+    ocr_batch_p.add_argument(
+        "--type",
+        default="school",
+        choices=["control", "school", "major", "rank"],
+    )
+    ocr_batch_p.add_argument("--subject-type", default=None)
+    ocr_batch_p.add_argument("--batch", default=None)
+    ocr_batch_p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="最多审计张数（抽样，默认全部）",
+    )
+    _add_ocr_engine_arg(ocr_batch_p)
+    _add_allow_slow_paddle_fallback_arg(ocr_batch_p)
+    ocr_batch_p.add_argument(
+        "--use-ocr-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+
+    ocr_profile_p = sub.add_parser(
+        "ocr-profile",
+        help="OCR 全流程耗时剖析（只统计，写入 ocr_profile.json）",
+    )
+    ocr_profile_p.add_argument(
+        "images",
+        nargs="+",
+        help="连续测试的图片路径（建议 3 张）",
+    )
+    ocr_profile_p.add_argument("--province", default=DEFAULT_PROVINCE)
+    ocr_profile_p.add_argument("--year", type=int, default=2024)
+    ocr_profile_p.add_argument("--subject-type", default="物理类")
+    ocr_profile_p.add_argument("--batch", default="本科批")
+    ocr_profile_p.add_argument(
+        "--use-ocr-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="使用 OCR 磁盘缓存（默认开启）",
+    )
+    ocr_profile_p.add_argument(
+        "--run-label",
+        default=None,
+        help="本次 profile 标签（如 first_run / second_run）",
+    )
+    ocr_profile_p.add_argument(
+        "--commit-database",
+        action="store_true",
+        help="database 阶段真正 commit（默认 rollback 仅测耗时）",
+    )
+    _add_ocr_engine_arg(ocr_profile_p)
+    _add_allow_slow_paddle_fallback_arg(ocr_profile_p)
+
+    ocr_precompute_p = sub.add_parser(
+        "ocr-precompute",
+        help="OCR 预计算：仅推理写缓存，不 normalize/validate/入库",
+    )
+    ocr_precompute_p.add_argument(
+        "image_dir",
+        help="图片目录，如 data/raw/hubei/2024/school/attachments",
+    )
+    ocr_precompute_p.add_argument("--province", default=DEFAULT_PROVINCE)
+    ocr_precompute_p.add_argument("--year", type=int, required=True)
+    ocr_precompute_p.add_argument(
+        "--type",
+        default="school",
+        choices=["control", "school", "major", "rank"],
+    )
+    ocr_precompute_p.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="最多处理张数（默认 20，小批量；传 0 表示不限制）",
+    )
+    ocr_precompute_p.add_argument(
+        "--use-ocr-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="使用/写入 OCR 磁盘缓存（默认开启）",
+    )
+    _add_ocr_engine_arg(ocr_precompute_p)
+
+    ocr_diagnose_p = sub.add_parser(
+        "ocr-diagnose",
+        help="OCR 运行时诊断（环境/模型/小图 benchmark，不改主流程）",
+    )
+    ocr_diagnose_p.add_argument(
+        "--image",
+        default=None,
+        help="样本图片路径（默认 data/raw/hubei/2024/school/attachments/1.png）",
+    )
+    ocr_diagnose_p.add_argument(
+        "--benchmark-sample",
+        action="store_true",
+        help="额外对样本图（缩放后）跑 production OCR（较慢，默认只测小图）",
+    )
+    _add_ocr_engine_arg(ocr_diagnose_p)
+
+    ocr_compare_p = sub.add_parser(
+        "ocr-compare-engines",
+        help="单张图 OCR 引擎质量对比（paddle vs rapidocr，不入库）",
+    )
+    ocr_compare_p.add_argument("image", help="图片路径")
+    ocr_compare_p.add_argument("--province", default=DEFAULT_PROVINCE)
+    ocr_compare_p.add_argument("--year", type=int, default=2024)
+    ocr_compare_p.add_argument(
+        "--type",
+        default="school",
+        choices=["control", "school", "major", "rank"],
+    )
+    ocr_compare_p.add_argument("--subject-type", default="物理类")
+    ocr_compare_p.add_argument("--batch", default="本科批")
+    ocr_compare_p.add_argument(
+        "--engines",
+        nargs="+",
+        choices=["paddle", "rapidocr"],
+        default=["paddle", "rapidocr"],
+        help="要对比的 OCR 引擎（默认 paddle rapidocr）",
+    )
+    ocr_compare_p.add_argument(
+        "--use-ocr-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="优先使用磁盘 OCR 缓存（默认开启）",
+    )
+    ocr_compare_p.add_argument(
+        "--skip-slow-paddle",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Paddle 无缓存时跳过慢速 live 推理（默认开启）",
+    )
+
+    ocr_compare_batch_p = sub.add_parser(
+        "ocr-compare-batch",
+        help="批量 OCR 引擎质量对比（不入库）",
+    )
+    ocr_compare_batch_p.add_argument(
+        "image_dir",
+        help="图片目录，如 data/raw/hubei/2024/school/attachments",
+    )
+    ocr_compare_batch_p.add_argument("--province", default=DEFAULT_PROVINCE)
+    ocr_compare_batch_p.add_argument("--year", type=int, default=2024)
+    ocr_compare_batch_p.add_argument(
+        "--type",
+        default="school",
+        choices=["control", "school", "major", "rank"],
+    )
+    ocr_compare_batch_p.add_argument("--subject-type", default="物理类")
+    ocr_compare_batch_p.add_argument("--batch", default="本科批")
+    ocr_compare_batch_p.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="最多对比张数（默认 5，传 0 表示不限制）",
+    )
+    ocr_compare_batch_p.add_argument(
+        "--engines",
+        nargs="+",
+        choices=["paddle", "rapidocr"],
+        default=["paddle", "rapidocr"],
+    )
+    ocr_compare_batch_p.add_argument(
+        "--use-ocr-cache",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+    ocr_compare_batch_p.add_argument(
+        "--skip-slow-paddle",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
+
+    verify_images_p = sub.add_parser(
+        "verify-images",
+        help="校验图片完整性（PIL verify/load，检测损坏/截断）",
+    )
+    verify_images_p.add_argument(
+        "image_dir",
+        help="图片目录，如 data/raw/hubei/2024/school/attachments",
+    )
+    verify_images_p.add_argument("--province", default=None, help="省份（用于报告命名与重新下载索引）")
+    verify_images_p.add_argument("--year", type=int, default=None)
+    verify_images_p.add_argument(
+        "--type",
+        default="school",
+        choices=["control", "school", "major", "rank"],
+    )
+    verify_images_p.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="最多检查张数（自然序）",
+    )
 
     meta_p = sub.add_parser("import-school-metadata", help="导入学校元数据 CSV（upsert）")
     meta_p.add_argument("file", help="CSV 路径，如 data/manual/school_metadata_seed.csv")
@@ -691,6 +1323,23 @@ def build_parser() -> argparse.ArgumentParser:
     dq_p = sub.add_parser("data-quality", help="数据质量检查")
     dq_p.add_argument("--year", type=int, required=True, help="年份，如 2024")
     dq_p.add_argument("--province", default=DEFAULT_PROVINCE, help="省份（默认：江苏）")
+
+    clean_ocr_p = sub.add_parser(
+        "clean-ocr-dirty-data",
+        help="清理 OCR 实验来源的脏 school 记录（默认 dry-run）",
+    )
+    clean_ocr_p.add_argument("--province", default=DEFAULT_PROVINCE, help="省份")
+    clean_ocr_p.add_argument("--year", type=int, required=True, help="年份，如 2024")
+    clean_ocr_p.add_argument(
+        "--source-prefix",
+        default="ocr_experimental:",
+        help="OCR source_url 前缀（默认 ocr_experimental:）",
+    )
+    clean_ocr_p.add_argument(
+        "--confirm-delete",
+        action="store_true",
+        help="确认删除匹配记录；不加则仅 dry-run",
+    )
 
     list_p = sub.add_parser("list-sources", help="列出已配置的数据源")
     list_p.add_argument(
@@ -769,6 +1418,55 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[*DATA_TYPES],
         help="数据类型：control/rank/school/major",
     )
+    disc_imp_p.add_argument(
+        "--enable-ocr",
+        action="store_true",
+        help="实验性：对 PNG/JPG 投档表启用 PaddleOCR 入库（默认关闭）",
+    )
+    disc_imp_p.add_argument(
+        "--ocr-require-audit-pass",
+        action="store_true",
+        help="批量 OCR 入库前须已通过 ocr-batch-audit（与 --enable-ocr 联用）",
+    )
+    disc_imp_p.add_argument(
+        "--ocr-limit",
+        type=int,
+        default=None,
+        metavar="N",
+        help="批量 OCR 时最多处理 N 张唯一图片（默认不限，建议先小批量如 5）",
+    )
+    _add_ocr_engine_arg(disc_imp_p)
+
+    nscan_p = sub.add_parser("national-scan", help="全国批量扫描（Phase 17）")
+    nscan_p.add_argument("--year", type=int, default=2024, help="扫描年份（默认 2024）")
+    nscan_p.add_argument(
+        "--type",
+        default="school",
+        choices=[*DATA_TYPES],
+        help="数据类型（默认 school）",
+    )
+    nscan_p.add_argument(
+        "--provinces",
+        nargs="*",
+        default=None,
+        help="省份列表，默认 registry 全部已注册省份",
+    )
+    nscan_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅 availability + discover，不下载不导入",
+    )
+    nscan_p.add_argument(
+        "--max-pages",
+        type=int,
+        default=50,
+        help="每省列表页扫描上限（默认 50）",
+    )
+    nscan_p.add_argument(
+        "--import-enabled",
+        default="true",
+        help="是否入库（true/false，默认 true；dry-run 时忽略）",
+    )
 
     return parser
 
@@ -785,6 +1483,14 @@ def main() -> int:
         "normalize-excel": cmd_normalize_excel,
         "import-excel": cmd_import_excel,
         "import-file": cmd_import_file,
+        "ocr-audit-image": cmd_ocr_audit_image,
+        "ocr-batch-audit": cmd_ocr_batch_audit,
+        "ocr-precompute": cmd_ocr_precompute,
+        "ocr-diagnose": cmd_ocr_diagnose,
+        "ocr-profile": cmd_ocr_profile,
+        "ocr-compare-engines": cmd_ocr_compare_engines,
+        "ocr-compare-batch": cmd_ocr_compare_batch,
+        "verify-images": cmd_verify_images,
         "import-school-metadata": cmd_import_school_metadata,
         "list-sources": cmd_list_sources,
         "download-source": cmd_download_source,
@@ -792,9 +1498,11 @@ def main() -> int:
         "extract-attachments-local": cmd_extract_attachments_local,
         "download-attachment": cmd_download_attachment,
         "data-quality": cmd_data_quality,
+        "clean-ocr-dirty-data": cmd_clean_ocr_dirty_data,
         "discover-sources": cmd_discover_sources,
         "discover-and-download": cmd_discover_and_download,
         "discover-download-import": cmd_discover_download_import,
+        "national-scan": cmd_national_scan,
     }
     handler = commands.get(args.command)
     if handler is None:

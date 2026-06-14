@@ -16,7 +16,7 @@ import pandas as pd
 from normalizers.admission_category import normalize_admission_category
 from normalizers.common import apply_defaults, empty_to_none, to_float, to_int, to_str
 from normalizers.school_batch import normalize_school_batch
-from normalizers.school_name import normalize_school_name
+from normalizers.school_name import normalize_school_name, looks_like_valid_school_name
 
 _COMBINED_SCHOOL_RE = re.compile(r"^([A-Za-z]\d{3,4})(.+)$")
 _COMBINED_MAJOR_RE = re.compile(r"^(\d{1,3})(\S.+)$")
@@ -24,14 +24,22 @@ _COMBINED_MAJOR_RE = re.compile(r"^(\d{1,3})(\S.+)$")
 
 def _split_combined_school_fields(code: str | None, name: str | None) -> tuple[str | None, str | None]:
     """拆分「院校代号及名称」类合并字段，如 A001北京大学。"""
-    for value in (code, name):
+    code_str = to_str(code)
+    name_str = to_str(name)
+    if looks_like_valid_school_name(name_str) and code_str:
+        if not _COMBINED_SCHOOL_RE.match(code_str):
+            return code_str, normalize_school_name(name_str)
+
+    for value in (code_str, name_str):
         if not value:
             continue
         text = str(value).strip()
         match = _COMBINED_SCHOOL_RE.match(text)
         if match:
-            return match.group(1), match.group(2).strip()
-    return code, name
+            split_code, split_name = match.group(1), match.group(2).strip()
+            if looks_like_valid_school_name(split_name):
+                return split_code, normalize_school_name(split_name)
+    return code_str, normalize_school_name(name_str) if name_str else None
 
 
 def _split_combined_major_field(major_code: str | None, major_name: str | None) -> tuple[str | None, str | None]:

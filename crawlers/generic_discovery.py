@@ -199,16 +199,20 @@ def _build_source_entry(item: dict[str, Any], crawler: HttpProvinceCrawler) -> d
         from provinces.guangdong.metadata import infer_guangdong_school_metadata
 
         school_meta = infer_guangdong_school_metadata(title)
-    elif crawler.province == "福建":
-        from provinces.fujian.metadata import infer_fujian_school_metadata
-
-        school_meta = infer_fujian_school_metadata(title)
-    elif crawler.province == "河北":
-        from provinces.hebei.metadata import infer_hebei_school_metadata
-
-        school_meta = infer_hebei_school_metadata(title)
     else:
-        school_meta = infer_school_metadata_from_title(title)
+        from province_registry import get_province_plugin
+        from provinces.metadata_bridge import infer_school_metadata_for_slug
+
+        plugin = get_province_plugin(crawler.province)
+        bridged = infer_school_metadata_for_slug(plugin.province_slug, title)
+        if bridged is not None:
+            school_meta = bridged
+        elif crawler.province == "福建":
+            from provinces.fujian.metadata import infer_fujian_school_metadata
+
+            school_meta = infer_fujian_school_metadata(title)
+        else:
+            school_meta = infer_school_metadata_from_title(title)
     from sources.base import normalize_access_status
 
     return {

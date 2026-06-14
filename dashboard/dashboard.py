@@ -26,6 +26,7 @@ from dashboard.data_access import (  # noqa: E402
     get_metadata_by_school_type,
     get_metadata_distinct_values,
     get_metadata_tier_counts,
+    get_national_overview,
     get_province_availability,
     get_province_coverage,
     get_quality_stats,
@@ -141,6 +142,35 @@ def page_home() -> None:
     )
     province_avail = get_province_availability()
     st.dataframe(province_avail, use_container_width=True, hide_index=True)
+
+    st.divider()
+    st.subheader("National Overview")
+    st.caption("已注册省份扩展状态（Phase 17）；structured / source-aware 与 access_status 分布")
+    overview = get_national_overview()
+    n1, n2, n3 = st.columns(3)
+    n1.metric("Structured provinces", overview["structured_count"])
+    n2.metric("Source-aware provinces", overview["source_aware_count"])
+    n3.metric("Total school records", f"{overview['school_total']:,}")
+
+    dist_cols = st.columns(2)
+    with dist_cols[0]:
+        access_df = pd.DataFrame(
+            [
+                {"Access Status": k, "Count": v}
+                for k, v in sorted(overview["access_status_distribution"].items())
+            ]
+        )
+        st.markdown("**Access Status 分布**")
+        st.dataframe(access_df, use_container_width=True, hide_index=True)
+    with dist_cols[1]:
+        mode_df = pd.DataFrame(
+            [
+                {"Query Mode": k, "Count": v}
+                for k, v in sorted(overview["query_mode_distribution"].items())
+            ]
+        )
+        st.markdown("**Query Mode 分布**")
+        st.dataframe(mode_df, use_container_width=True, hide_index=True)
 
     st.divider()
     st.subheader("Province Coverage")

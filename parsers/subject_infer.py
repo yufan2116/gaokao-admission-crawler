@@ -31,11 +31,28 @@ def _infer_subject_type_from_text(
         if "理科" in text:
             return "理科"
         return None
-    if "历史" in text or "文科" in text:
+    if "历史" in text or "文科" in text or "首选历史" in text:
         return "历史类"
-    if "物理" in text or "理科" in text:
+    if "物理" in text or "理科" in text or "首选物理" in text:
         return "物理类"
     return None
+
+
+def infer_subject_from_sheet_context(
+    *,
+    sheet_name: str | int | None = None,
+    header_rows_text: str | None = None,
+    subject_mode: Any = None,
+) -> str | None:
+    """从 sheet 名或表头前几行文本推断科类（新高考通用）。"""
+    parts: list[str] = []
+    if isinstance(sheet_name, str) and sheet_name.strip():
+        parts.append(sheet_name.strip())
+    if header_rows_text and header_rows_text.strip():
+        parts.append(header_rows_text.strip())
+    if not parts:
+        return None
+    return _infer_subject_type_from_text(" ".join(parts), subject_mode=subject_mode)
 
 
 def infer_subject_from_dataframe(df: pd.DataFrame) -> str | None:
@@ -61,6 +78,7 @@ def resolve_subject_type(
     *,
     prefer_sheet: bool = False,
     subject_mode: Any = None,
+    header_rows_text: str | None = None,
 ) -> str | None:
     """
     解析科类。
@@ -69,6 +87,13 @@ def resolve_subject_type(
     prefer_sheet=True（rank 多 sheet）：sheet 名 > 文件名 > CLI > Excel 内容
     """
     if prefer_sheet:
+        from_header = infer_subject_from_sheet_context(
+            sheet_name=sheet_name,
+            header_rows_text=header_rows_text,
+            subject_mode=subject_mode,
+        )
+        if from_header:
+            return from_header
         if isinstance(sheet_name, str):
             from_sheet = _infer_subject_type_from_text(sheet_name, subject_mode=subject_mode)
             if from_sheet:
@@ -89,6 +114,14 @@ def resolve_subject_type(
     from_filename = infer_subject_from_filename(path.stem, subject_mode=subject_mode)
     if from_filename:
         return from_filename
+
+    from_header = infer_subject_from_sheet_context(
+        sheet_name=sheet_name,
+        header_rows_text=header_rows_text,
+        subject_mode=subject_mode,
+    )
+    if from_header:
+        return from_header
 
     from_df = infer_subject_from_dataframe(df)
     if from_df:

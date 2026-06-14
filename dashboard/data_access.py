@@ -112,6 +112,30 @@ def get_province_availability() -> pd.DataFrame:
     return pd.DataFrame(get_province_availability_display_rows())
 
 
+def get_national_overview() -> dict:
+    """National Expansion 首页概览（Phase 17）。"""
+    from collections import Counter
+
+    from configs.province_data_availability import get_province_data_availability
+    from configs.release import SOURCE_AWARE_PROVINCES, STRUCTURED_PROVINCES
+
+    stats = get_home_stats()
+    rows = get_province_data_availability()
+    latest_year = 2024
+    avail = [r for r in get_province_data_availability() if r.get("year") == latest_year]
+    access_counter = Counter(r.get("access_status", "unknown") for r in avail)
+    query_counter = Counter(r.get("query_mode", "mixed") for r in avail)
+
+    return {
+        "structured_count": len(STRUCTURED_PROVINCES),
+        "source_aware_count": len(SOURCE_AWARE_PROVINCES),
+        "school_total": stats["school_total"],
+        "access_status_distribution": dict(access_counter),
+        "query_mode_distribution": dict(query_counter),
+        "availability_rows": rows,
+    }
+
+
 def get_school_null_rates(
     year: int | None,
     province: str | None,

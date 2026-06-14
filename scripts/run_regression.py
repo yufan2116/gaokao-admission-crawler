@@ -92,7 +92,17 @@ DASHBOARD_CASES: list[dict[str, Any]] = [
         "name": "province_availability_rows",
         "check": "province_availability_nonempty",
     },
+    {
+        "name": "national_overview",
+        "check": "national_overview_smoke",
+    },
 ]
+
+NATIONAL_SCAN_DRY_RUN_CASE = {
+    "name": "national_scan_dry_run",
+    "year": 2024,
+    "data_type": "school",
+}
 
 
 def _serialize_report(report: DataQualityReport) -> dict[str, Any]:
@@ -182,7 +192,7 @@ def run_api_tests() -> list[dict[str, Any]]:
 
 
 def run_dashboard_tests() -> list[dict[str, Any]]:
-    from dashboard.data_access import get_home_stats, get_province_availability
+    from dashboard.data_access import get_home_stats, get_national_overview, get_province_availability
 
     results: list[dict[str, Any]] = []
     for case in DASHBOARD_CASES:
@@ -201,6 +211,18 @@ def run_dashboard_tests() -> list[dict[str, Any]]:
                 entry["passed"] = len(df) > 0 and "Access Status" in df.columns
                 if not entry["passed"]:
                     entry["error"] = "Province Availability 为空或缺少 Access Status 列"
+            elif case["check"] == "national_overview_smoke":
+                overview = get_national_overview()
+                entry["structured_count"] = overview["structured_count"]
+                entry["source_aware_count"] = overview["source_aware_count"]
+                entry["passed"] = (
+                    overview["structured_count"] == 4
+                    and overview["source_aware_count"] == 7
+                    and overview["school_total"] >= 0
+                    and len(overview["access_status_distribution"]) >= 1
+                )
+                if not entry["passed"]:
+                    entry["error"] = "National Overview 指标异常"
             else:
                 entry["passed"] = False
                 entry["error"] = f"未知检查: {case['check']}"
@@ -209,6 +231,43 @@ def run_dashboard_tests() -> list[dict[str, Any]]:
             entry["error"] = str(exc)
         results.append(entry)
     return results
+
+
+def run_national_scan_dry_run_test() -> dict[str, Any]:
+    from services.national_scan import national_scan_report_path, run_national_scan
+
+    entry: dict[str, Any] = {
+        "name": NATIONAL_SCAN_DRY_RUN_CASE["name"],
+        "command": "python main.py national-scan --year 2024 --type school --dry-run",
+    }
+    try:
+        report = run_national_scan(
+            year=NATIONAL_SCAN_DRY_RUN_CASE["year"],
+            data_type=NATIONAL_SCAN_DRY_RUN_CASE["data_type"],
+            dry_run=True,
+            import_enabled=False,
+            max_pages=5,
+        )
+        summary = report.get("summary") or {}
+        skipped = int(summary.get("skipped") or 0)
+        entry["summary"] = summary
+        entry["report_path"] = str(national_scan_report_path(2024, "school"))
+        entry["passed"] = (
+            summary.get("total_provinces") == 11
+            and len(report.get("items") or []) == 11
+            and skipped >= 3
+            and all(item.get("access_status") for item in report.get("items", []))
+            and Path(entry["report_path"]).exists()
+        )
+        if not entry["passed"]:
+            entry["error"] = (
+                f"total={summary.get('total_provinces')} skipped={skipped} "
+                f"failed={summary.get('failed')}"
+            )
+    except Exception as exc:
+        entry["passed"] = False
+        entry["error"] = str(exc)
+    return entry
 
 
 def _summarize(section: list[dict[str, Any]]) -> dict[str, int]:
@@ -221,13 +280,25 @@ def build_report() -> dict[str, Any]:
     dq = run_data_quality_tests()
     api = run_api_tests()
     dash = run_dashboard_tests()
+    national = run_national_scan_dry_run_test()
     summary = {
         "data_quality": _summarize(dq),
         "api": _summarize(api),
         "dashboard": _summarize(dash),
+        "national_scan": {"passed": 1 if national.get("passed") else 0, "failed": 0 if national.get("passed") else 1, "total": 1},
     }
-    total_failed = summary["data_quality"]["failed"] + summary["api"]["failed"] + summary["dashboard"]["failed"]
-    total_passed = summary["data_quality"]["passed"] + summary["api"]["passed"] + summary["dashboard"]["passed"]
+    total_failed = (
+        summary["data_quality"]["failed"]
+        + summary["api"]["failed"]
+        + summary["dashboard"]["failed"]
+        + summary["national_scan"]["failed"]
+    )
+    total_passed = (
+        summary["data_quality"]["passed"]
+        + summary["api"]["passed"]
+        + summary["dashboard"]["passed"]
+        + summary["national_scan"]["passed"]
+    )
     return {
         "version": STABLE_VERSION_ID,
         "version_label": STABLE_VERSION_LABEL,
@@ -242,6 +313,7 @@ def build_report() -> dict[str, Any]:
         "data_quality": dq,
         "api_tests": api,
         "dashboard_tests": dash,
+        "national_scan_dry_run": national,
     }
 
 
@@ -254,6 +326,7 @@ def main() -> int:
     print(f"  data_quality: {report['summary']['data_quality']}")
     print(f"  api:          {report['summary']['api']}")
     print(f"  dashboard:    {report['summary']['dashboard']}")
+    print(f"  national_scan: {report['summary']['national_scan']}")
     print(f"Written to {REPORT_PATH}")
 
     for section_key in ("data_quality", "api_tests", "dashboard_tests"):
@@ -261,6 +334,9 @@ def main() -> int:
             if not item.get("passed"):
                 label = item.get("name") or item.get("command", section_key)
                 print(f"  FAIL: {label} — {item.get('error') or item.get('warning', '')}")
+    ns = report.get("national_scan_dry_run") or {}
+    if not ns.get("passed"):
+        print(f"  FAIL: {ns.get('name')} — {ns.get('error') or ns.get('warning', '')}")
 
     return 0 if report["overall"] == "pass" else 1
 

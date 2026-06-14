@@ -21,6 +21,10 @@ PROVINCE_SOURCE_TYPES: dict[str, list[SourceType]] = {
     "河北": [SourceType.SEED_ONLY],
     "广东": [SourceType.ARCHIVE],
     "河南": [SourceType.ARCHIVE, SourceType.PROTECTED],
+    "湖北": [SourceType.SEED_ONLY],
+    "湖南": [SourceType.SEED_ONLY],
+    "辽宁": [SourceType.SEED_ONLY],
+    "重庆": [SourceType.SEED_ONLY],
 }
 
 PROVINCE_DEFAULT_ACCESS_STATUS: dict[str, AccessStatus] = {
@@ -31,6 +35,10 @@ PROVINCE_DEFAULT_ACCESS_STATUS: dict[str, AccessStatus] = {
     "hebei": AccessStatus.CONNECTION_RESET,
     "henan": AccessStatus.VERIFICATION_REQUIRED,
     "guangdong": AccessStatus.PARTIAL,
+    "hubei": AccessStatus.AVAILABLE,
+    "hunan": AccessStatus.UNKNOWN,
+    "liaoning": AccessStatus.UNKNOWN,
+    "chongqing": AccessStatus.UNKNOWN,
 }
 
 PROVINCE_NAME_TO_DEFAULT_STATUS: dict[str, AccessStatus] = {
@@ -41,6 +49,10 @@ PROVINCE_NAME_TO_DEFAULT_STATUS: dict[str, AccessStatus] = {
     "河北": AccessStatus.CONNECTION_RESET,
     "河南": AccessStatus.VERIFICATION_REQUIRED,
     "广东": AccessStatus.PARTIAL,
+    "湖北": AccessStatus.AVAILABLE,
+    "湖南": AccessStatus.UNKNOWN,
+    "辽宁": AccessStatus.UNKNOWN,
+    "重庆": AccessStatus.UNKNOWN,
 }
 
 
